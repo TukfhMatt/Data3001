@@ -1,0 +1,20 @@
+# Virtual environment
+.venv/
+
+# Jupyter
+.ipynb_checkpoints/
+*.pyc
+__pycache__/
+
+# Data files (large — don't commit)
+data/
+*.nc
+*.zarr
+*.csv
+
+# Figures (regenerable)
+figures/
+
+# OS
+.DS_Store
+
