@@ -2,7 +2,8 @@
 Agulhas Region — Fetch GDP subset via CloudDrift
 Streams the NOAA GDP hourly dataset (zarr on AWS S3, same source as
 clouddrift.datasets.gdp1h) chunk by chunk, keeps only observations inside
-a padded Agulhas box, thins them to 6-hourly, and saves a small local file.
+a padded Agulhas box at the native hourly resolution, drops positions
+interpolated across long gaps between satellite fixes, and saves a local file.
 
 Transfers ~1.2 GB once (lon/lat must be scanned in full); the saved subset
 is what every later script reads.
@@ -17,17 +18,19 @@ import zarr
 from tqdm import tqdm
 
 ZARR_URL = "https://noaa-oar-hourly-gdp-pds.s3.amazonaws.com/latest/gdp-v2.01.zarr"
-OUT_PATH = "data/agulhas_gdp6h_subset.nc"
+OUT_PATH = "data/agulhas_gdp1h_subset.nc"
 
 # ── 1. Region ────────────────────────────────────────────────────────────────
-# Analysis box R is 10–40°E, 45–25°S. Save a 10° margin so positions just
-# after a drifter leaves R are kept (needed for the "outside R" state and
-# exit-edge statistics).
-LON_MIN, LON_MAX = 0.0, 50.0
-LAT_MIN, LAT_MAX = -55.0, -15.0
+# Analysis box R is 5–50°E, 50–20°S. The saved area is wide enough for any
+# candidate box from 05_box_selection.py (up to 0–55°E, 55–15°S) plus a
+# margin, so positions just after a drifter leaves the box are kept (needed
+# for the "outside R" state and exit-edge statistics).
+LON_MIN, LON_MAX = -5.0, 65.0
+LAT_MIN, LAT_MAX = -60.0, -5.0
 
-STEP_S = 6 * 3600  # thin hourly → 6-hourly
-OBS_VARS = ["time", "lon", "lat", "ve", "vn", "drogue_status"]
+STEP_S = 3600       # keep every hourly position (set 6 * 3600 to thin to 6-hourly)
+MAX_GAP_S = 6 * 3600  # drop positions interpolated across > 6 h between fixes
+OBS_VARS = ["time", "lon", "lat", "ve", "vn", "drogue_status", "gap"]
 
 os.makedirs("data", exist_ok=True)
 
@@ -52,11 +55,13 @@ def scan(k):
     if not box.any():
         return None
     time = root["time"][sl]
-    keep = box & (np.round(time).astype(np.int64) % STEP_S == 0)
+    gap = root["gap"][sl]
+    keep = box & (np.round(time).astype(np.int64) % STEP_S == 0) & (gap <= MAX_GAP_S)
+    n_gap = int((box & (gap > MAX_GAP_S)).sum())
     if not keep.any():
-        return None
-    out = {"obs_index": np.arange(sl.start, sl.stop)[keep],
-           "time": time[keep], "lon": lon[keep], "lat": lat[keep]}
+        return {"n_gap": n_gap}
+    out = {"obs_index": np.arange(sl.start, sl.stop)[keep], "time": time[keep],
+           "lon": lon[keep], "lat": lat[keep], "gap": gap[keep], "n_gap": n_gap}
     for v in ["ve", "vn", "drogue_status"]:
         out[v] = root[v][sl][keep]
     return out
@@ -66,6 +71,8 @@ with ThreadPoolExecutor(max_workers=8) as pool:
     parts = [p for p in tqdm(pool.map(scan, range(n_chunks)), total=n_chunks,
                              desc="Scanning chunks") if p is not None]
 
+n_gap = sum(p["n_gap"] for p in parts)
+parts = [p for p in parts if "obs_index" in p]
 sub = {v: np.concatenate([p[v] for p in parts]) for v in ["obs_index"] + OBS_VARS}
 
 # ── 4. Rebuild ragged array for the subset ───────────────────────────────────
@@ -80,6 +87,8 @@ ds = xr.Dataset(
         "ve": ("obs", sub["ve"].astype(np.float32)),
         "vn": ("obs", sub["vn"].astype(np.float32)),
         "drogue_status": ("obs", sub["drogue_status"].astype(bool)),
+        "gap": ("obs", sub["gap"].astype(np.float32), {"units": "s",
+                "long_name": "Time interval between previous and next location"}),
     },
     coords={
         "id": ("traj", traj_ids[kept_traj]),
@@ -87,13 +96,14 @@ ds = xr.Dataset(
     },
     attrs={
         "source": ZARR_URL,
-        "description": "GDP hourly subset thinned to 6-hourly, padded Agulhas box",
+        "description": f"GDP hourly subset (step {STEP_S // 3600} h, gap <= {MAX_GAP_S // 3600} h), padded Agulhas box",
         "lon_range": f"{LON_MIN}..{LON_MAX}",
         "lat_range": f"{LAT_MIN}..{LAT_MAX}",
     },
 )
 ds.to_netcdf(OUT_PATH)
 
-print(f"\nKept trajectories : {ds.sizes['traj']:,}")
+print(f"\nDropped (gap > {MAX_GAP_S // 3600} h): {n_gap:,}")
+print(f"Kept trajectories : {ds.sizes['traj']:,}")
 print(f"Kept observations : {ds.sizes['obs']:,}")
 print(f"Saved → {OUT_PATH} ({os.path.getsize(OUT_PATH) / 1e6:.1f} MB)")

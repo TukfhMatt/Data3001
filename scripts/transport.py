@@ -3,7 +3,7 @@ Helpers for using a saved Agulhas transport operator.
 
     from transport import load_operator, release, propagate, to_grid
 
-    op = load_operator("data/P_drogued_1deg_3p5d.npz")
+    op = load_operator("data/P_drogued_1deg_3p5d_5E-50E_50S-20S.npz")
     p0 = release(op, lon=31.5, lat=-30.5)   # all mass in one cell
     p  = propagate(op, p0, days=30)         # distribution after 30 days
     grid = to_grid(op, p)                   # (n_lat, n_lon) map, NaN off-ocean

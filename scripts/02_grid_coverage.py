@@ -1,7 +1,8 @@
 """
 Agulhas Region — Grid Coverage
-Counts drifters per grid cell in box R at 1° and 0.5° resolution, split by
-drogue status, to choose the transition-matrix grid.
+Counts drifters per grid cell in box R at each grid size (defaults 0.5°, 1°
+and 2°; see scripts/config.py), split by drogue status, to choose the
+transition-matrix grid.
 
 Observations along one trajectory are strongly correlated, so the main
 measure is the number of *distinct drifters* per cell, not raw obs.
@@ -15,14 +16,15 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-GDP_LOCAL = "data/agulhas_gdp6h_subset.nc"
+from config import MIN_DRIFTERS, grid_shape, parse_args
+
+args = parse_args(__doc__, grid=True, multi=True)
 os.makedirs("figures", exist_ok=True)
 
 # ── 1. Load subset, restrict to R ────────────────────────────────────────────
-LON_MIN, LON_MAX = 10.0, 40.0
-LAT_MIN, LAT_MAX = -45.0, -25.0
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 
-ds = xr.open_dataset(GDP_LOCAL)
+ds = xr.open_dataset(args.data)
 lon = ds["lon"].values
 lat = ds["lat"].values
 drogue = ds["drogue_status"].values.astype(bool)
@@ -30,19 +32,18 @@ traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
 
 in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
 
-RESOLUTIONS = [1.0, 0.5]
+RESOLUTIONS = sorted(args.res, reverse=True)
 THRESHOLDS  = [5, 10, 20]   # distinct drifters per cell
 SUBSETS = {
-    "Drogued (container)":  in_R &  drogue,
-    "Undrogued (oil)":      in_R & ~drogue,
+    "Drogued (15 m current)":   in_R &  drogue,
+    "Undrogued (+ wind slip)":  in_R & ~drogue,
 }
 
 
 # ── 2. Per-cell counts ───────────────────────────────────────────────────────
 def cell_counts(mask, res):
     """Return (obs count, distinct drifter count) grids, shape (n_lat, n_lon)."""
-    n_lon = int(round((LON_MAX - LON_MIN) / res))
-    n_lat = int(round((LAT_MAX - LAT_MIN) / res))
+    n_lon, n_lat = grid_shape(args.box, res)
     i = ((lon[mask] - LON_MIN) // res).astype(int)
     j = ((lat[mask] - LAT_MIN) // res).astype(int)
     cell = j * n_lon + i
@@ -64,13 +65,13 @@ for res in RESOLUTIONS:
 # ── 3. Summary table ─────────────────────────────────────────────────────────
 print(f"Distinct drifters per ocean cell in R ({LON_MIN:g}–{LON_MAX:g}°E, "
       f"{-LAT_MIN:g}–{-LAT_MAX:g}°S)\n")
-header = f"{'Subset':<22}{'Res':>5}{'Cells':>7}{'Median':>8}" + "".join(f"{'≥' + str(t):>7}" for t in THRESHOLDS)
+header = f"{'Subset':<26}{'Res':>5}{'Cells':>7}{'Median':>8}" + "".join(f"{'≥' + str(t):>7}" for t in THRESHOLDS)
 print(header)
 print("-" * len(header))
 for (name, res), (obs, drifters, ocean) in results.items():
     d = drifters[ocean]
     frac = "".join(f"{(d >= t).mean():>7.0%}" for t in THRESHOLDS)
-    print(f"{name:<22}{res:>4}°{ocean.sum():>7}{np.median(d):>8.0f}{frac}")
+    print(f"{name:<26}{res:>4}°{ocean.sum():>7}{np.median(d):>8.0f}{frac}")
 
 np.savez(
     "data/grid_coverage.npz",
@@ -90,21 +91,21 @@ except ImportError:
     ccrs = None
     subplot_kw = {}
 
-MIN_DRIFTERS = 10  # cells below this are shown in grey
 cmap = plt.get_cmap("Blues").copy()
 cmap.set_under("#d9d9d9")
 vmax = max(d.max() for _, d, _ in results.values())
 norm = LogNorm(vmin=MIN_DRIFTERS, vmax=vmax)
 
-fig, axes = plt.subplots(len(SUBSETS), len(RESOLUTIONS), figsize=(13, 8.5),
+fig, axes = plt.subplots(len(SUBSETS), len(RESOLUTIONS), figsize=(6.5 * len(RESOLUTIONS), 8.5),
                          subplot_kw=subplot_kw, constrained_layout=True)
 for r, name in enumerate(SUBSETS):
     for c, res in enumerate(RESOLUTIONS):
-        ax = axes[r, c]
+        ax = axes[r][c] if len(RESOLUTIONS) > 1 else axes[r]
         obs, drifters, ocean = results[(name, res)]
         grid = np.where(ocean, np.maximum(drifters, 0.5), np.nan)  # 0.5 → "under"
-        lon_edges = np.arange(LON_MIN, LON_MAX + res / 2, res)
-        lat_edges = np.arange(LAT_MIN, LAT_MAX + res / 2, res)
+        n_lon, n_lat = grid_shape(args.box, res)   # last edge clipped to the box
+        lon_edges = np.minimum(LON_MIN + np.arange(n_lon + 1) * res, LON_MAX)
+        lat_edges = np.minimum(LAT_MIN + np.arange(n_lat + 1) * res, LAT_MAX)
         kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
         mesh = ax.pcolormesh(lon_edges, lat_edges, grid, cmap=cmap, norm=norm,
                              edgecolor="white", linewidth=0.2, **kw)

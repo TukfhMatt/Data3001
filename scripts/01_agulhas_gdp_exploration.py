@@ -2,7 +2,7 @@
 Agulhas Region — GDP Drifter Exploration
 Analyses drifter coverage in the Agulhas region using the local subset
 produced by 00_fetch_agulhas_subset.py (GDP hourly via CloudDrift,
-thinned to 6-hourly, padded box).
+native hourly resolution, padded box).
 """
 
 import os
@@ -12,8 +12,12 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
+from config import parse_args
+
+args = parse_args(__doc__)
+
 # ── 1. Load dataset ──────────────────────────────────────────────────────────
-GDP_LOCAL = "data/agulhas_gdp6h_subset.nc"
+GDP_LOCAL = args.data
 
 os.makedirs("figures", exist_ok=True)
 
@@ -28,8 +32,7 @@ print(f"\nTrajectories in padded box : {ds.sizes['traj']:,}")
 print(f"Observations in padded box : {ds.sizes['obs']:,}")
 
 # ── 2. Agulhas bounding box ──────────────────────────────────────────────────
-LON_MIN, LON_MAX = 10.0, 40.0
-LAT_MIN, LAT_MAX = -45.0, -25.0
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 
 lon = ds["lon"].values
 lat = ds["lat"].values
@@ -54,7 +57,7 @@ drogue = ds["drogue_status"].values  # bool or int: True/1 = drogued
 mask_undrogued = mask & ~drogue.astype(bool)
 mask_drogued   = mask &  drogue.astype(bool)
 
-print(f"\nUndrogued obs in box (oil proxy) : {mask_undrogued.sum():,}")
+print(f"\nUndrogued obs in box (+ wind slip): {mask_undrogued.sum():,}")
 print(f"Drogued obs in box (15m current) : {mask_drogued.sum():,}")
 
 # ── 5. Map ───────────────────────────────────────────────────────────────────
@@ -77,7 +80,7 @@ if use_cartopy:
     ax.scatter(lon[mask_drogued],   lat[mask_drogued],   s=0.3,
                c="steelblue",  alpha=0.4, label="Drogued (15m)",              zorder=4)
     ax.scatter(lon[mask_undrogued], lat[mask_undrogued], s=0.3,
-               c="darkorange", alpha=0.5, label="Undrogued (surface/oil proxy)", zorder=5)
+               c="darkorange", alpha=0.5, label="Undrogued (surface + wind slip)", zorder=5)
     ax.set_title("GDP Drifter Observations — Agulhas Region", fontsize=13)
     ax.legend(markerscale=10, loc="lower right")
 else:
@@ -85,7 +88,7 @@ else:
     ax.scatter(lon[mask_drogued],   lat[mask_drogued],   s=0.3,
                c="steelblue",  alpha=0.4, label="Drogued (15m)")
     ax.scatter(lon[mask_undrogued], lat[mask_undrogued], s=0.3,
-               c="darkorange", alpha=0.5, label="Undrogued (surface/oil proxy)")
+               c="darkorange", alpha=0.5, label="Undrogued (surface + wind slip)")
     ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
     ax.set_title("GDP Drifter Observations — Agulhas Region", fontsize=13)
     ax.legend(markerscale=10)
