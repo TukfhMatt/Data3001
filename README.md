@@ -72,6 +72,7 @@ python scripts/13_trap_stability.py         # 365-day retention hotspots and gri
 python scripts/14_residence_time.py        # expected whole-box residence time across grid sizes
 python scripts/15_exit_zones.py            # eventual W/E/S/N exit probabilities and dominant exit zones
 python scripts/16_almost_invariant_regions.py  # spectral candidate transport regions at 1°
+python scripts/17_release_point_maps.py      # release maps at 7, 30 and 365 days
 ```
 
 Scripts `01`–`04` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1°, 2°; τ = 3.5 days):
@@ -105,6 +106,7 @@ python scripts/04_shipping_overlay.py --res 1 --tau 3.5                         
 | `14_residence_time.py` | Estimates expected whole-box residence time from each reliable drogued starting cell at 0.5°, 1° and 2°. Empty rows are treated as unsupported, and the survival series is integrated for up to 10 years. | `data/residence_time_{res}deg.csv`, `data/residence_time_summary.csv`, `figures/residence_time_1deg.png` |
 | `15_exit_zones.py` | Calculates eventual exit probabilities through the four absorbing box boundaries (`W`, `E`, `S`, `N`), identifies the dominant exit side for each reliable starting cell, and compares exit structure across grid sizes. | `data/exit_zones_{res}deg.csv`, `data/exit_zone_summary.csv`, `figures/dominant_exit_zone_1deg.png` |
 | `16_almost_invariant_regions.py` | Uses spectral clustering of the 1° drogued transport-affinity matrix to identify four candidate almost-invariant regions, then validates them with the original directional transition matrix at one step, 30 days and 365 days. | `data/almost_invariant_region_summary.csv`, `data/almost_invariant_regions_1deg.csv`, `figures/almost_invariant_regions_1deg.png` |
+| `17_release_point_maps.py` | Propagates all shipping-selected release points under the 1° drogued and undrogued operators at approximately 1 week, 1 month and 1 year, producing spatial probability maps and exit-fate summaries. | `data/release_point_map_summary.csv`, `figures/release_map_*_1deg.png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix, plus the pairing and counting helpers shared by `03` and `06` | — |
 
@@ -177,7 +179,7 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Region, grid and lag are parameters; matrices at 0.5°, 1° and 2° for both drogue types
 - [x] Shipping lanes over currents; candidate release points chosen and ranked
 - [x] Drifter bootstrap: 95% intervals on release-point fates, drogued vs undrogued differences, row stability
-- [ ] Release-point maps at 1 week, 1 month, 1 year
+- [x] Release-point maps at 1 week, 1 month, 1 year
 - [x] Held-out validation (5-fold by drifter): calibrated exits, beats persistence and mean-current advection by 28 days
 - [ ] Sensitivity to τ and grid size; seasonal matrices
 - [ ] Oil version with ERA5 winds and mass decay
