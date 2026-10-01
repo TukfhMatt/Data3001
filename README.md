@@ -60,11 +60,19 @@ python scripts/01_agulhas_gdp_exploration.py
 python scripts/02_grid_coverage.py
 python scripts/03_transition_matrix.py
 python scripts/04_shipping_overlay.py
+python scripts/05_box_selection.py        # compare candidate boxes and choose R
 python scripts/06_bootstrap.py             # ~2 min at 1°
 python scripts/07_wind_slip.py             # undrogued − drogued slip per cell
 python scripts/08_fetch_era5.py            # ERA5 winds at drifter positions (needs ~/.cdsapirc)
 python scripts/09_oil_wind.py              # oil matrix: undrogued + missing windage (+ drogued check)
 python scripts/10_validation.py            # held-out validation, 5-fold by drifter
+python scripts/11_whole_box_analysis.py     # grid support across 0.5°, 1° and 2°
+python scripts/12_coastal_coverage.py       # coastal-cell data support
+python scripts/13_trap_stability.py         # 365-day retention hotspots and grid stability
+python scripts/14_residence_time.py        # expected whole-box residence time across grid sizes
+python scripts/15_exit_zones.py            # eventual W/E/S/N exit probabilities and dominant exit zones
+python scripts/16_almost_invariant_regions.py  # spectral candidate transport regions at 1°
+python scripts/17_release_point_maps.py      # release maps at 7, 30 and 365 days
 ```
 
 Scripts `01`–`04` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1°, 2°; τ = 3.5 days):
@@ -92,6 +100,13 @@ python scripts/04_shipping_overlay.py --res 1 --tau 3.5                         
 | `08_fetch_era5.py` | Requests ERA5 10 m winds from the Copernicus CDS API one year at a time, interpolates them to every drifter position and deletes the raw year; needs a CDS account, the ERA5 licence and `~/.cdsapirc` | `data/drifter_wind10m.nc` |
 | `09_oil_wind.py` | Oil matrix: undrogued transitions moved by the windage they lack (3.5% minus their measured windage) × the ERA5 wind along each 3.5-day path; a drogued + 3.5% check matrix; comparison at the release points | `data/P_oil_…npz`, `data/P_oil_check_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png` |
 | `10_validation.py` | Held-out validation, 5-fold by drifter: position error against persistence and mean-current advection, log score against climatology, exit calibration | `data/validation_summary_…csv`, `figures/agulhas_validation_…png` |
+| `11_whole_box_analysis.py` | Checks outgoing-transition and distinct-drifter support across the 0.5°, 1° and 2° drogued matrices. Reports active/empty cells, transition-count thresholds, independent drifter support and flagged low-support rows. | `data/whole_box_grid_support.csv`, `figures/whole_box_transition_support.png`, `figures/whole_box_drifter_support.png` |
+| `12_coastal_coverage.py` | Identifies ocean-state cells intersecting the Natural Earth 10 m coastline and measures coastal transition and drifter support at all three grid sizes. | `data/coastal_grid_support.csv`, `figures/coastal_drifter_support.png` |
+| `13_trap_stability.py` | Uses 365-day in-box retention as a hotspot score, excludes empty and flagged rows, selects the top 10% reliable cells, and compares hotspot locations across grid sizes using Jaccard and overlap coefficients. | `data/retention_hotspot_summary.csv`, `data/retention_hotspot_stability.csv` |
+| `14_residence_time.py` | Estimates expected whole-box residence time from each reliable drogued starting cell at 0.5°, 1° and 2°. Empty rows are treated as unsupported, and the survival series is integrated for up to 10 years. | `data/residence_time_{res}deg.csv`, `data/residence_time_summary.csv`, `figures/residence_time_1deg.png` |
+| `15_exit_zones.py` | Calculates eventual exit probabilities through the four absorbing box boundaries (`W`, `E`, `S`, `N`), identifies the dominant exit side for each reliable starting cell, and compares exit structure across grid sizes. | `data/exit_zones_{res}deg.csv`, `data/exit_zone_summary.csv`, `figures/dominant_exit_zone_1deg.png` |
+| `16_almost_invariant_regions.py` | Uses spectral clustering of the 1° drogued transport-affinity matrix to identify four candidate almost-invariant regions, then validates them with the original directional transition matrix at one step, 30 days and 365 days. | `data/almost_invariant_region_summary.csv`, `data/almost_invariant_regions_1deg.csv`, `figures/almost_invariant_regions_1deg.png` |
+| `17_release_point_maps.py` | Propagates all shipping-selected release points under the 1° drogued and undrogued operators at approximately 1 week, 1 month and 1 year, producing spatial probability maps and exit-fate summaries. | `data/release_point_map_summary.csv`, `figures/release_map_*_1deg.png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix, plus the pairing and counting helpers shared by `03` and `06` | — |
 
@@ -106,12 +121,29 @@ curl -L -o data/shipping/shipdensity_commercial.zip \
 `notebooks/01_agulhas_gdp_exploration.ipynb` is not part of the pipeline and does not run on this setup; use the scripts.
 
 ---
+## SQ2 whole-box feasibility
+
+Whole-box transition support is strong across all three drogued-grid resolutions. Among active cells, 97.6% of 0.5° cells, 99.4% of 1° cells and 99.6% of 2° cells have at least 50 outgoing transitions. The median numbers of outgoing transitions are 432, 1,750 and 6,395 per active cell, respectively.
+
+Independent drifter support is more sensitive to grid resolution. The share of active cells supported by at least 10 distinct drifters is 51.6% at 0.5°, 78.1% at 1° and 88.8% at 2°. Correspondingly, 48.4%, 21.9% and 11.2% of active rows are flagged as having fewer than 10 distinct drifters. This supports 1° as the main analysis grid, with 2° as a coarser robustness check; the 0.5° grid is substantially more weakly sampled.
+
+Coastal cells are less well sampled than the box as a whole. At 1°, 93.2% of active coastal cells still have at least 50 outgoing transitions, but only 39.2% have at least 10 distinct drifters. At 2°, these figures improve to 97.9% and 52.1%, respectively. Coastal conclusions should therefore be interpreted more cautiously, especially at finer resolution.
+
+Long-term retention analysis identifies a recurring high-retention region in the western Indian Ocean, approximately around 41–45°E and 29–33°S. The top-10% 365-day retention hotspots show relatively strong agreement between the 1° and 2° grids (48.7% Jaccard similarity; 73.3% overlap coefficient), but substantially weaker agreement involving the 0.5° grid (15.9% Jaccard for 0.5° vs 1°, and 12.0% for 0.5° vs 2°). This is consistent with the much weaker independent-drifter support at 0.5°.
+
+Expected whole-box residence times are also broadly stable at the better-supported resolutions. Across reliable starting cells, the mean residence time is 236.9 days at 1° and 227.7 days at 2°, with medians of 233.1 and 226.2 days, respectively. The 0.5° estimate is somewhat lower at a mean of 209.7 days. The longest-residence cells again cluster broadly around 41–45°E and 29–33°S. After 10 years of integration, the maximum remaining survival probability is negligible at all three resolutions, so truncation of the residence-time estimate is small.
+
+Exit behaviour is highly consistent across grid sizes. The eastern boundary is the dominant eventual exit for 80.5% of reliable 0.5° cells, 83.4% of reliable 1° cells and 81.4% of reliable 2° cells. At 1°, the mean eventual exit probabilities across reliable starting cells are 71.3% east, 20.0% west, 6.7% south and 2.1% north. All reliable cells at all three resolutions have at least 80% of their eventual fate resolved into the four absorbing exit states, indicating a robust large-scale eastward exit pattern.
+
+A spectral analysis of the 1° drogued matrix identifies four candidate almost-invariant transport regions. Their one-step internal retention ranges from 80.8% to 94.3%, while 30-day retention within the same region ranges from 55.2% to 70.2%. By 365 days, only 2.4%–8.7% remains in the same region, showing that these structures are coherent on short-to-intermediate timescales rather than permanently isolated. These regions are therefore interpreted as candidate almost-invariant regions from a spectral-clustering approximation, rather than as an exact PCCA+ decomposition.
+
+Overall, SQ2 is well supported for broad offshore transport, retention, residence-time and exit-pattern analysis at 1°–2° resolution. The 1° grid is used as the main analysis scale and the 2° grid provides a useful robustness check. The 0.5° grid remains useful as a sensitivity case but is too sparsely supported to claim stable fine-scale traps, while coastal results require additional caution. Whole-box diagnostics consistently show a persistent high-retention zone in the western Indian Ocean, residence times of roughly 7–8 months at the better-supported resolutions, predominantly eastward eventual exit, and several short-to-intermediate-timescale coherent transport regions.
 
 ## Using the transition matrix
 
 Each `.npz` file is a self-contained operator. `P[i, j]` is the probability that material in state `i` is in state `j` one lag τ later (`tau_days`).
 
-- **States `0 … n_cells − 1`**: ocean cells of R (1,112 at 1°; the mapping to the grid is in `cell_flat`).
+- **States `0 … n_cells − 1`**: ocean cells of R (970 at 1°; the mapping to the grid is in `cell_flat`).
 - **Last 4 states**: absorbing "exited R" states, in the order of `exit_labels` (`W`, `E`, `S`, `N`).
 
 ```python
@@ -147,8 +179,8 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Region, grid and lag are parameters; matrices at 0.5°, 1° and 2° for both drogue types
 - [x] Shipping lanes over currents; candidate release points chosen and ranked
 - [x] Drifter bootstrap: 95% intervals on release-point fates, drogued vs undrogued differences, row stability
-- [ ] Release-point maps at 1 week, 1 month, 1 year
+- [x] Release-point maps at 1 week, 1 month, 1 year
 - [x] Held-out validation (5-fold by drifter): calibrated exits, beats persistence and mean-current advection by 28 days
 - [ ] Sensitivity to τ and grid size; seasonal matrices
 - [ ] Oil version with ERA5 winds and mass decay
-- [ ] Whole-box analysis: accumulation zones, exit zones, residence time, almost-invariant regions
+- [x] Whole-box analysis: accumulation zones, exit zones, residence time, almost-invariant regions
