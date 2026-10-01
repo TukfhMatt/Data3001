@@ -15,9 +15,9 @@ A check matrix applies the full ALPHA_OIL to drogued transitions instead.
 The two should agree where both have enough data; a large disagreement at a
 release point means its oil result rests on the method choice.
 
-Shifted end points that land on land or on a cell no drifter visited keep
-their unshifted end (the matrix has no beaching state); their share is
-printed. Surface mass decays as m(t) = exp(−t / DECAY_DAYS), applied when
+Moves into the stranded state (the drifter ran aground inside R within τ)
+are kept as they are. Shifted end points that land on land or on a cell no
+drifter visited keep their unshifted end; their share is printed. Surface mass decays as m(t) = exp(−t / DECAY_DAYS), applied when
 reporting, so P itself conserves probability like the drifter matrices.
 
     .venv/bin/python scripts/09_oil_wind.py --res 1 --tau 3.5
@@ -32,8 +32,9 @@ from matplotlib.colors import LogNorm
 import xarray as xr
 
 from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
-from transport import (EXIT_LABELS, coastal_states, load_operator, pair_indices,
-                       propagate, release, row_normalise, to_grid, transition_states)
+from transport import (EXIT_LABELS, STRANDED, coastal_states, load_operator, move_indices,
+                       propagate, release, row_normalise, strand_times, to_grid,
+                       transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -111,7 +112,9 @@ print(f"Oil windage {100 * ALPHA_OIL:.1f}% → added to undrogued: {100 * alpha_
       f"to drogued: {100 * ALPHA_OIL:.1f}%")
 
 # ── 3. Pairs, mean wind along each pair, shifted end points ──────────────────
-start, end = pair_indices(traj_idx, t, in_R, TAU)
+start, end, stranded = move_indices(traj_idx, t, in_R, TAU, strand_times(ds, traj_idx, t, in_R))
+strand_s, strand_e = start[stranded], end[stranded]
+start, end = start[~stranded], end[~stranded]
 # Mean wind over the positions from start up to (not including) end; the
 # subset is sorted by (trajectory, time), so these are the pair's own path
 ok_w = np.isfinite(u10)
@@ -143,13 +146,19 @@ def build(name, drogue_flag, alpha):
     ext_lon, ext_lat = np.concatenate([lon, lo2]), np.concatenate([lat, la2])
     from_state, to_state = transition_states(ext_cell, cells, s, n + np.arange(len(s)),
                                              ext_lon, ext_lat, args.box)
+    # Stranding moves of this drogue type, unshifted
+    k = (drogue[strand_s] == drogue_flag) & (drogue[strand_e] == drogue_flag)
+    f2, t2 = transition_states(cell_flat, cells, strand_s[k], strand_e[k], lon, lat, args.box,
+                               np.ones(k.sum(), bool))
+    from_state, to_state = np.r_[from_state, f2], np.r_[to_state, t2]
+    s = np.r_[s, strand_s[k]]
     n_cells = len(cells)
     n_states = n_cells + len(EXIT_LABELS)
     C = np.zeros((n_states, n_states))
     np.add.at(C, (from_state, to_state), 1)
     pairs = np.unique(np.stack([from_state, traj_idx[s]]), axis=1)
     row_drifters = np.bincount(pairs[0], minlength=n_states)
-    P, empty = row_normalise(C, n_cells)
+    P, empty = row_normalise(C, cells, n_lon)
     flagged = row_drifters[:n_cells] < MIN_DRIFTERS
     out = operator_path(name, RES, TAU, args.box)
     np.savez_compressed(
@@ -169,7 +178,8 @@ def build(name, drogue_flag, alpha):
     print(f"Wind shift per step  : median {np.median(shift_km):.0f} km, 90th pct {np.percentile(shift_km, 90):.0f} km")
     print(f"Kept unshifted (land): {beached.mean():.2%}")
     print(f"Flagged rows         : {flagged.mean():.0%}; empty cells {len(empty)}")
-    print(f"Mean exit prob / step: {P[:n_cells, n_cells:].sum(axis=1).mean():.1%}")
+    print(f"Mean exit prob / step: {P[:n_cells, n_cells:n_cells + STRANDED].sum(axis=1).mean():.1%}; "
+          f"stranding {P[:n_cells, n_cells + STRANDED].mean():.2%} ({k.sum():,} stranding moves)")
     print(f"Saved → {out}")
     return out
 
@@ -201,7 +211,9 @@ for _, pt in points.iterrows():
                     dist[(key, d)] = p.copy()
         p365 = dist[(key, 365)]
         row.update({f"{key}_coast_30d": exposure, f"{key}_inR_365d": p365[:n_cells].sum(),
-                    f"{key}_W_365d": p365[n_cells], f"{key}_E_365d": p365[n_cells + 1]})
+                    f"{key}_W_365d": p365[n_cells], f"{key}_E_365d": p365[n_cells + 1],
+                    f"{key}_stranded_30d": dist[(key, 30)][n_cells + STRANDED],
+                    f"{key}_stranded_365d": p365[n_cells + STRANDED]})
     for d in [7, 30]:
         row[f"tvd_oil_check_{d}d"] = 0.5 * np.abs(dist[("oil", d)] - dist[("oil_check", d)]).sum()
         row[f"tvd_oil_undrogued_{d}d"] = 0.5 * np.abs(dist[("oil", d)] - dist[("undrogued", d)]).sum()
@@ -209,13 +221,14 @@ for _, pt in points.iterrows():
 cmp_ = pd.DataFrame(rows)
 cmp_.to_csv(f"data/oil_compare_{TAG}.csv", index=False)
 
-print(f"\nRelease points — 30-day coastal exposure (material-days), 1-year fate, A vs B distance")
-print(f"{'':<28}{'coast 30 d':^24}{'in R 1 yr':^24}{'exit W 1 yr':^24}{'TVD A–B':^14}")
-print(f"{'':<28}" + f"{'undr':>8}{'oil A':>8}{'chk B':>8}" * 3 + f"{'7 d':>7}{'30 d':>7}")
+print(f"\nRelease points — 30-day coastal exposure (material-days) and stranding, 1-year fate, A vs B distance")
+print(f"{'':<28}{'coast 30 d':^24}{'stranded 30 d':^24}{'in R 1 yr':^24}{'exit W 1 yr':^24}{'TVD A–B':^14}")
+print(f"{'':<28}" + f"{'undr':>8}{'oil A':>8}{'chk B':>8}" * 4 + f"{'7 d':>7}{'30 d':>7}")
 for _, r in cmp_.iterrows():
     flag = "  ⚠" if r.tvd_oil_check_30d > DISAGREE_TVD else ""
     print(f"{r['name'][:27]:<28}"
           + "".join(f"{r[f'{k}_coast_30d']:>8.1f}" for k in ops)
+          + "".join(f"{100 * r[f'{k}_stranded_30d']:>7.1f}%" for k in ops)
           + "".join(f"{100 * r[f'{k}_inR_365d']:>7.0f}%" for k in ops)
           + "".join(f"{100 * r[f'{k}_W_365d']:>7.0f}%" for k in ops)
           + f"{r.tvd_oil_check_7d:>7.2f}{r.tvd_oil_check_30d:>7.2f}{flag}")

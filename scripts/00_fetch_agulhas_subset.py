@@ -6,9 +6,15 @@ a padded Agulhas box at the native hourly resolution, drops positions
 interpolated across long gaps between satellite fixes, and saves a local file.
 
 Transfers ~1.2 GB once (lon/lat must be scanned in full); the saved subset
-is what every later script reads.
+is what every later script reads. Each drifter also keeps GDP's per-drifter
+fate: how its record ended (`typedeath`, 1 = ran aground) and its last good
+date (`end_date`), which the stranded state in 03 is built from.
+
+    .venv/bin/python scripts/00_fetch_agulhas_subset.py
+    .venv/bin/python scripts/00_fetch_agulhas_subset.py --metadata-only   # refresh the per-drifter fields only
 """
 
+import argparse
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -21,16 +27,22 @@ ZARR_URL = "https://noaa-oar-hourly-gdp-pds.s3.amazonaws.com/latest/gdp-v2.01.za
 OUT_PATH = "data/agulhas_gdp1h_subset.nc"
 
 # ── 1. Region ────────────────────────────────────────────────────────────────
-# Analysis box R is 5–50°E, 50–20°S. The saved area is wide enough for any
-# candidate box from 05_box_selection.py (up to 0–55°E, 55–15°S) plus a
-# margin, so positions just after a drifter leaves the box are kept (needed
-# for the "outside R" state and exit-edge statistics).
+# The saved area holds every candidate box from 05_box_selection.py (search
+# area 0–60°E, 55–10°S) plus a margin, so positions just after a drifter
+# leaves the box are kept (needed for the exit states and exit-edge statistics).
 LON_MIN, LON_MAX = -5.0, 65.0
 LAT_MIN, LAT_MAX = -60.0, -5.0
 
 STEP_S = 3600       # keep every hourly position (set 6 * 3600 to thin to 6-hourly)
 MAX_GAP_S = 6 * 3600  # drop positions interpolated across > 6 h between fixes
 OBS_VARS = ["time", "lon", "lat", "ve", "vn", "drogue_status", "gap"]
+TYPEDEATH = ("0 buoy still alive, 1 ran aground, 2 picked up by vessel, 3 stopped transmitting, "
+             "4 sporadic transmissions, 5 bad batteries, 6 inactive status")
+
+parser = argparse.ArgumentParser(description="Fetch the GDP hourly subset for the Agulhas region")
+parser.add_argument("--metadata-only", action="store_true",
+                    help="add the per-drifter fields to an existing subset without rescanning")
+args = parser.parse_args()
 
 os.makedirs("data", exist_ok=True)
 
@@ -44,6 +56,32 @@ traj_ids = root["ID"][:]
 rowsize = root["rowsize"][:].astype(np.int64)
 traj_start = np.concatenate([[0], np.cumsum(rowsize)[:-1]])
 print(f"Trajectories: {len(traj_ids):,}   Observations: {n_obs:,}   Chunks: {n_chunks}")
+
+
+def drifter_fields(ids):
+    """Per-drifter fate for the given GDP IDs, in the same order."""
+    pos = np.searchsorted(traj_ids, ids) if np.all(np.diff(traj_ids) > 0) else \
+        np.array([np.where(traj_ids == i)[0][0] for i in ids])
+    if not np.array_equal(traj_ids[pos], ids):
+        raise SystemExit("Subset drifter IDs not found in the GDP store.")
+    end = root["end_date"][:][pos].astype(np.float64)
+    return {
+        "typedeath": ("traj", root["typedeath"][:][pos].astype(np.int8),
+                      {"long_name": "How the drifter's record ended", "flag_meanings": TYPEDEATH}),
+        "end_date": ("traj", np.round(end).astype("datetime64[s]").astype("datetime64[ns]"),
+                     {"long_name": "Last good date of the drifter's full record (DAC quality control)"}),
+    }
+
+
+if args.metadata_only:
+    ds = xr.load_dataset(OUT_PATH)
+    ds = ds.assign_coords(drifter_fields(ds["id"].values))
+    tmp = OUT_PATH + ".tmp"
+    ds.to_netcdf(tmp)
+    os.replace(tmp, OUT_PATH)
+    print(f"Per-drifter fields added for {ds.sizes['traj']:,} drifters; ran aground: "
+          f"{int((ds['typedeath'].values == 1).sum()):,} → {OUT_PATH}")
+    raise SystemExit
 
 
 # ── 3. Scan chunks ───────────────────────────────────────────────────────────
@@ -92,6 +130,7 @@ ds = xr.Dataset(
     },
     coords={
         "id": ("traj", traj_ids[kept_traj]),
+        **drifter_fields(traj_ids[kept_traj]),
         "time": ("obs", sub["time"].astype("datetime64[s]").astype("datetime64[ns]")),
     },
     attrs={

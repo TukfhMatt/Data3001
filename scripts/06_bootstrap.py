@@ -6,8 +6,9 @@ For each drogue type, drifters are drawn with replacement, the transition
 matrix is rebuilt from their transitions, and the release points from 04 are
 propagated again. Repeated N_BOOT times, this gives:
 
-  • 95% intervals on each release point's fate: share still in R and exited
-    W / E / S / N after 7, 30 and 365 days, and 30-day coastal exposure
+  • 95% intervals on each release point's fate: share still in R, exited
+    W / E / S / N and stranded after 7, 30 and 365 days, and 30-day
+    coastal exposure
   • whether drogued and undrogued differ at each point (interval of the
     difference excludes 0)
   • row stability: median total-variation distance (TVD) between bootstrap
@@ -29,8 +30,8 @@ from matplotlib.colors import LinearSegmentedColormap
 import xarray as xr
 
 from config import DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
-from transport import (coastal_states, load_operator, pair_indices, row_normalise,
-                       state_of, transition_states)
+from transport import (EXIT_LABELS, coastal_states, load_operator, move_indices, row_normalise,
+                       state_of, strand_times, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -60,13 +61,13 @@ cell_flat = np.where(
     ((lat - LAT_MIN) // RES).astype(int) * n_lon + ((lon - LON_MIN) // RES).astype(int),
     -1,
 )
-start, end = pair_indices(traj_idx, t, in_R, TAU_DAYS)
+start, end, stranded = move_indices(traj_idx, t, in_R, TAU_DAYS, strand_times(ds, traj_idx, t, in_R))
 
 ops = {name: load_operator(operator_path(name, RES, TAU_DAYS, args.box)) for name in DROGUE_TYPES}
 op0 = ops["drogued"]   # both share the same ocean cells
 cells = op0["cell_flat"]
 n_cells = len(cells)
-n_states = n_cells + 4
+n_states = n_cells + len(EXIT_LABELS)
 coastal = coastal_states(op0)
 
 cand = pd.read_csv("data/release_candidates.csv")
@@ -81,7 +82,7 @@ def drifter_counts(flag):
     Summing them over drifters gives the count matrix C behind P."""
     same = (drogue[start] == flag) & (drogue[end] == flag)
     s, e = start[same], end[same]
-    f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box)
+    f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box, stranded[same])
     key = traj_idx[s].astype(np.int64) * n_states**2 + f * n_states + to
     uniq, n = np.unique(key, return_counts=True)
     d = uniq // n_states**2
@@ -122,7 +123,7 @@ for name, flag in DROGUE_TYPES.items():
     for b in range(N_BOOT):
         w = np.bincount(rng.integers(n_drifters, size=n_drifters), minlength=n_drifters)
         Cb = np.bincount(ft, weights=n * w[d_idx], minlength=n_states**2).reshape(n_states, n_states)
-        Pb, _ = row_normalise(Cb, n_cells)
+        Pb, _ = row_normalise(Cb, cells, n_lon)
         tvd[b] = 0.5 * np.abs(Pb[:n_cells] - P[:n_cells]).sum(axis=1)
         for k, v in fates(Pb).items():
             samples[k][b] = v
@@ -165,7 +166,7 @@ def fmt(name, metric, days, pct=True):
 
 print(f"\nRelease points after 1 year, estimate (95% interval), {RES:g}°, τ = {TAU_DAYS:g} d")
 for metric, label in [("in_R", "Still in R"), ("exit_W", "Exited west (Atlantic)"),
-                      ("exit_E", "Exited east")]:
+                      ("exit_E", "Exited east"), ("exit_stranded", "Stranded")]:
     show = pd.DataFrame({d: fmt(d, metric, 365) for d in DROGUE_TYPES})
     sig = diffs[(diffs.metric == metric) & (diffs.days == 365)].set_index("name")["significant"]
     show["differ"] = sig.map({True: "yes", False: "no"})
@@ -238,8 +239,9 @@ plt.savefig(out_map, dpi=150, bbox_inches="tight")
 plt.close()
 
 # 6b. One-year fate per release point with 95% intervals
-metrics = [("in_R", "Still in R"), ("exit_W", "Exited west (Atlantic)"), ("exit_E", "Exited east")]
-fig, axes = plt.subplots(1, 3, figsize=(15, 0.42 * len(cand) + 1.8), sharey=True, constrained_layout=True)
+metrics = [("in_R", "Still in R"), ("exit_W", "Exited west (Atlantic)"), ("exit_E", "Exited east"),
+           ("exit_stranded", "Stranded")]
+fig, axes = plt.subplots(1, 4, figsize=(19, 0.42 * len(cand) + 1.8), sharey=True, constrained_layout=True)
 y = np.arange(len(cand))[::-1]
 offset = {"drogued": 0.15, "undrogued": -0.15}
 for ax, (metric, label) in zip(axes, metrics):

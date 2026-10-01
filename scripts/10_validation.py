@@ -7,8 +7,10 @@ the same helpers as 03, then predicts the held-out drifters.
 
 Test starts are the held-out drifters' positions in R at 00 UTC each day.
 The true outcome is followed at whole steps of τ, exactly as the chain moves:
-the cell at t0 + kτ, or the exit side the first time the drifter is outside R
-at a step (exits are absorbing, as in the matrix). Horizons are whole steps.
+the cell at t0 + kτ, the exit side the first time the drifter is outside R
+at a step, or stranded once the drifter has run aground inside R (exits and
+stranding are absorbing, as in the matrix). Every whole step up to
+HORIZON_DAYS is scored, so runs at different τ share a day axis for 11.
 
 Scores, per drogue type and horizon:
   • position error   — distance from the predicted centre of mass (given the
@@ -22,6 +24,8 @@ Scores, per drogue type and horizon:
                        state, against a climatology baseline (training
                        frequency of each outcome at that horizon)
   • exit calibration — predicted vs observed probability of having left R
+                       across an edge, and the Brier score of that
+                       probability; predicted vs observed share stranded
 
     .venv/bin/python scripts/10_validation.py --res 1 --tau 3.5
 """
@@ -34,14 +38,16 @@ import matplotlib.pyplot as plt
 import xarray as xr
 
 from config import DROGUE_TYPES, box_tag, grid_shape, parse_args
-from transport import EXIT_LABELS, pair_indices, row_normalise, transition_states
+from transport import (EXIT_LABELS, STRANDED, last_obs_index, move_indices, row_normalise,
+                       strand_times, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES, TAU = args.res, args.tau
 K_FOLDS = 5
 SEED = 0
-HORIZON_STEPS = [1, 2, 8]            # whole steps of τ: 3.5, 7, 28 days at τ = 3.5
+HORIZON_DAYS = 28                    # score every whole step of τ up to this horizon
+HORIZON_STEPS = list(range(1, int(np.ceil(HORIZON_DAYS / TAU - 1e-9)) + 1))
 LOG_FLOOR = 1e-6                     # probability floor for the log score
 EXIT_BINS = np.linspace(0, 1, 11)
 COLORS = {"Markov": "#2a78d6", "Mean-current advection": "#eb6834", "Persistence": "#7a7a7a"}
@@ -72,7 +78,9 @@ cell_lat = np.minimum(LAT_MIN + (cj + 0.5) * RES, LAT_MAX)
 
 key = traj_idx.astype(np.int64) * 10**10 + t
 tau_s = int(round(TAU * 86400))
-start_all, end_all = pair_indices(traj_idx, t, in_R, TAU)   # all τ-pairs starting in R
+strand_t = strand_times(ds, traj_idx, t, in_R)
+last_obs = last_obs_index(traj_idx)
+start_all, end_all, strand_all = move_indices(traj_idx, t, in_R, TAU, strand_t)   # all moves from R
 
 
 def exit_side(lo, la):
@@ -103,15 +111,19 @@ def test_samples(flag, test_traj):
     alive = state[:, 0] >= 0
     exited = np.zeros(len(s0), bool)
     for k in range(1, K + 1):
-        # Exits are absorbing: an exited sample keeps its exit state and needs
-        # no further observations (it may have drifted beyond the saved area)
+        # Exits and stranding are absorbing: such a sample keeps its state and
+        # needs no further observations
         carry = alive & exited
         state[carry, k] = state[carry, k - 1]
         j = obs_at(s0, k * tau_s)
         has = j >= 0
         has[has] &= drogue[j[has]] == flag        # same drogue type, as in training
         cand = alive & ~exited
-        alive &= ~(cand & ~has)                    # lost: no matching observation
+        strands = (cand & ~has & (strand_t[s0] >= 0) & (strand_t[s0] < t[s0] + k * tau_s)
+                   & (drogue[last_obs[s0]] == flag))
+        state[strands, k] = n_cells + STRANDED
+        exited |= strands
+        alive &= ~(cand & ~has & ~strands)         # lost: no matching observation
         ok = cand & has
         jj = np.where(ok, j, 0)
         outside = ok & (cell_flat[jj] < 0)
@@ -128,10 +140,10 @@ def train_fold(flag, train_traj):
     keep = (np.isin(traj_idx[start_all], train_traj) & (drogue[start_all] == flag)
             & (drogue[end_all] == flag))
     s, e = start_all[keep], end_all[keep]
-    fs, ts = transition_states(cell_flat, cells, s, e, lon, lat, args.box)
+    fs, ts = transition_states(cell_flat, cells, s, e, lon, lat, args.box, strand_all[keep])
     C = np.zeros((n_states, n_states))
     np.add.at(C, (fs, ts), 1)
-    P, empty = row_normalise(C, n_cells)
+    P, empty = row_normalise(C, cells, n_lon)
     # Mean current per cell from training observations of this type
     m = in_R & (drogue == flag) & np.isin(traj_idx, train_traj) & np.isfinite(ve) & np.isfinite(vn)
     st = state_of_cell[cell_flat[m]]
@@ -176,22 +188,24 @@ for name, flag in DROGUE_TYPES.items():
         train_traj = np.setdiff1d(trajs, test_traj)
         P, u, v, n_train = train_fold(flag, train_traj)
         s0, state, pos = test_samples(flag, test_traj)
-        Pk = {k: np.linalg.matrix_power(P, k) for k in HORIZON_STEPS}
         # Climatology baseline: training-set frequency of each outcome state at k
         _, tr_state, _ = test_samples(flag, train_traj)
+        Pk = np.eye(n_states)
         for k in HORIZON_STEPS:
+            Pk = Pk @ P
             ok = (state[:, 0] >= 0) & (state[:, k] >= 0)
             st0, stk = state[ok, 0], state[ok, k]
-            pred = Pk[k][st0]                                   # (n, n_states)
+            pred = Pk[st0]                                      # (n, n_states)
             p_true = pred[np.arange(len(stk)), stk]
             clim = np.bincount(tr_state[tr_state[:, k] >= 0, k], minlength=n_states).astype(float)
             clim /= clim.sum()
-            p_exit = pred[:, n_cells:].sum(axis=1)
-            actual_exit = stk >= n_cells
+            p_exit = pred[:, n_cells:n_cells + STRANDED].sum(axis=1)
+            actual_exit = (stk >= n_cells) & (stk < n_cells + STRANDED)
+            actual_strand = stk == n_cells + STRANDED
             exit_records.append(pd.DataFrame({"type": name, "k": k, "p_exit": p_exit,
                                               "exited": actual_exit}))
             # Position error for samples still in R at k
-            stay = ~actual_exit
+            stay = stk < n_cells
             mass = pred[stay, :n_cells]
             w = mass / np.maximum(mass.sum(axis=1, keepdims=True), 1e-12)
             com_lon, com_lat = w @ cell_lon, w @ cell_lat
@@ -216,6 +230,8 @@ for name, flag in DROGUE_TYPES.items():
                 "err_advect_centre_km": np.median(haversine_km(advc_lo[advc_ok], advc_la[advc_ok],
                                                                act[advc_ok, 0], act[advc_ok, 1])),
                 "exit_pred": p_exit.mean(), "exit_obs": actual_exit.mean(),
+                "brier_exit": np.mean((p_exit - actual_exit) ** 2),
+                "strand_pred": pred[:, n_cells + STRANDED].mean(), "strand_obs": actual_strand.mean(),
             })
         print(f"{name:<9} fold {f + 1}/{K_FOLDS}: {len(test_traj)} held-out drifters, "
               f"{int((state[:, 0] >= 0).sum()):,} test starts")
@@ -229,7 +245,9 @@ summary = res.groupby(["type", "days"]).agg(
     err_advect_centre_km=("err_advect_centre_km", "mean"),
     err_persist_centre_km=("err_persist_centre_km", "mean"),
     log_markov=("log_markov", "mean"), log_clim=("log_clim", "mean"),
-    exit_pred=("exit_pred", "mean"), exit_obs=("exit_obs", "mean")).reset_index()
+    exit_pred=("exit_pred", "mean"), exit_obs=("exit_obs", "mean"),
+    brier_exit=("brier_exit", "mean"), strand_pred=("strand_pred", "mean"),
+    strand_obs=("strand_obs", "mean")).reset_index()
 summary["skill_vs_persist"] = 1 - summary.err_markov_km / summary.err_persist_km
 summary["skill_vs_advect"] = 1 - summary.err_markov_km / summary.err_advect_km
 summary["skill_vs_advect_centre"] = 1 - summary.err_markov_km / summary.err_advect_centre_km
@@ -238,12 +256,12 @@ summary.to_csv(f"data/validation_summary_{TAG}.csv", index=False)
 print(f"\nHeld-out validation, {K_FOLDS}-fold by drifter ({RES:g}°, τ = {TAU:g} d); mean over folds")
 print(f"{'':<16}{'':>9}{'median error (km)':^45}{'skill vs advect':^18}")
 print(f"{'type':<10}{'days':>6}{'tests':>9}{'Markov':>9}{'adv':>9}{'adv@ctr':>9}{'pers':>9}{'pers@ctr':>9}"
-      f"{'exact':>9}{'@ctr':>9}{'log Mkv':>9}{'log clim':>9}{'exit pred':>10}{'exit obs':>9}")
+      f"{'exact':>9}{'@ctr':>9}{'log Mkv':>9}{'log clim':>9}{'exit pred':>10}{'exit obs':>9}{'Brier':>8}{'strand pred':>12}{'obs':>7}")
 for _, r in summary.iterrows():
     print(f"{r.type:<10}{r.days:>6g}{int(r.n_test):>9,}{r.err_markov_km:>9.0f}{r.err_advect_km:>9.0f}"
           f"{r.err_advect_centre_km:>9.0f}{r.err_persist_km:>9.0f}{r.err_persist_centre_km:>9.0f}"
           f"{r.skill_vs_advect:>9.0%}{r.skill_vs_advect_centre:>9.0%}{r.log_markov:>9.2f}{r.log_clim:>9.2f}"
-          f"{r.exit_pred:>10.1%}{r.exit_obs:>9.1%}")
+          f"{r.exit_pred:>10.1%}{r.exit_obs:>9.1%}{r.brier_exit:>8.3f}{r.strand_pred:>12.2%}{r.strand_obs:>7.2%}")
 print("Errors: median km from forecast to actual position (still-in-R samples). @ctr = baseline "
       "started from the cell centre, the same information the matrix has. Log score: higher is better.")
 print(f"Saved → data/validation_folds_{TAG}.csv, data/validation_summary_{TAG}.csv")
@@ -260,7 +278,7 @@ for ax, name in zip(axes[:2], DROGUE_TYPES):
         ax.fill_between(spread.index, spread["min"], spread["max"], color=COLORS[label], alpha=0.15)
     ax.plot(sub.days, sub.err_advect_centre_km, ls="--", lw=1.5, color=COLORS["Mean-current advection"],
             label="Mean-current advection from cell centre")
-    ax.set_xticks(sub.days)
+    ax.set_xticks(np.arange(0, sub.days.max() + 1, 7))
     ax.set_xlabel("Horizon (days)")
     ax.set_ylabel("Median position error (km)")
     ax.set_title(f"{name.capitalize()}: forecast error on held-out drifters\n(band = range over {K_FOLDS} folds)",
@@ -275,7 +293,7 @@ for name, color in [("drogued", "#2a78d6"), ("undrogued", "#eb6834")]:
     cal = e.groupby(b, observed=True).agg(p=("p_exit", "mean"), o=("exited", "mean"), n=("exited", "size"))
     cal = cal[cal.n >= 30]
     ax.plot(cal.p, cal.o, marker="o", lw=2, color=color, label=name.capitalize())
-ax.set_xlabel(f"Predicted probability of having left R by day {max(HORIZON_STEPS) * TAU:g}")
+ax.set_xlabel(f"Predicted probability of having left R across an edge by day {max(HORIZON_STEPS) * TAU:g}")
 ax.set_ylabel("Observed share that left")
 ax.set_title("Exit calibration (bins with ≥ 30 test starts)", fontsize=10)
 ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.grid(alpha=0.3); ax.legend(fontsize=8)
