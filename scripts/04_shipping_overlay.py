@@ -30,7 +30,7 @@ from rasterio.windows import from_bounds
 import xarray as xr
 
 from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args
-from transport import load_operator, propagate, state_of
+from transport import coastal_states, load_operator, propagate, state_of
 
 args = parse_args(__doc__, grid=True, lag=True)
 
@@ -130,13 +130,10 @@ ocean_grid = is_ocean.reshape(n_lat, n_lon)
 
 # Near-shore cells: ocean cells with a non-ocean neighbour inside the grid
 # (the matrix has no beaching state, so these stand in for coastal impact)
-pad = np.pad(~ocean_grid, 1, constant_values=False)
-land_nb = np.zeros_like(ocean_grid)
-for dj in (-1, 0, 1):
-    for di in (-1, 0, 1):
-        land_nb |= pad[1 + dj: 1 + dj + n_lat, 1 + di: 1 + di + n_lon]
-coastal_grid = ocean_grid & land_nb
-coastal_state = coastal_grid.ravel()[op["cell_flat"]]
+coastal_state = coastal_states(op)
+coastal_grid = np.zeros(n_lat * n_lon, bool)
+coastal_grid[op["cell_flat"]] = coastal_state
+coastal_grid = coastal_grid.reshape(n_lat, n_lon)
 
 # Reliable cells: enough drifters behind the row, and real outgoing data,
 # in both matrices

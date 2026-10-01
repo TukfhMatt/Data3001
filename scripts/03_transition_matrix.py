@@ -16,11 +16,11 @@ import numpy as np
 import xarray as xr
 
 from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args
-from transport import propagate, release, to_grid
+from transport import (EXIT_LABELS, pair_indices, propagate, release, row_normalise,
+                       to_grid, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-EXIT_LABELS = np.array(["W", "E", "S", "N"])
 TEST_RELEASE = (31.5, -30.5)   # off Durban
 
 # ── 1. Load subset ───────────────────────────────────────────────────────────
@@ -34,26 +34,7 @@ years = ds["time"].values.astype("datetime64[Y]").astype(int) + 1970
 in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
 
 
-# ── 2. Pair each obs with the same drifter τ later ───────────────────────────
-def pairs_at(tau_days):
-    """Indices (start, end) of obs pairs from one drifter exactly τ apart.
-    Data is sorted by (trajectory, time), so a combined key can be binary-searched."""
-    tau_s = int(round(tau_days * 86400))
-    key = traj_idx.astype(np.int64) * 10**10 + t
-    target = key + tau_s
-    j = np.minimum(np.searchsorted(key, target), len(key) - 1)
-    has_pair = in_R & (key[j] == target)
-    return np.where(has_pair)[0], j[has_pair]
-
-
-def exit_state(lon_e, lat_e):
-    """Which side of R a point outside R lies on (largest excursion wins)."""
-    excursion = np.stack([LON_MIN - lon_e, lon_e - LON_MAX,
-                          LAT_MIN - lat_e, lat_e - LAT_MAX])
-    return np.argmax(excursion, axis=0)
-
-
-# ── 3. Build P for each grid, lag and drogue type ────────────────────────────
+# ── 2. Build P for each grid, lag and drogue type ────────────────────────────
 def build(name, drogue_flag, res, tau, start, end):
     # If a side is not a multiple of res, the last row/column is a partial cell
     n_lon, n_lat = grid_shape(args.box, res)
@@ -73,15 +54,7 @@ def build(name, drogue_flag, res, tau, start, end):
     cells = np.unique(cell_flat[cell_flat >= 0])
     n_cells = len(cells)
     n_states = n_cells + len(EXIT_LABELS)
-    state_of_cell = np.full(n_lat * n_lon, -1)
-    state_of_cell[cells] = np.arange(n_cells)
-
-    from_state = state_of_cell[cell_flat[s]]
-    to_state = np.where(
-        cell_flat[e] >= 0,
-        state_of_cell[np.maximum(cell_flat[e], 0)],
-        n_cells + exit_state(lon[e], lat[e]),
-    )
+    from_state, to_state = transition_states(cell_flat, cells, s, e, lon, lat, args.box)
 
     C = np.zeros((n_states, n_states))
     np.add.at(C, (from_state, to_state), 1)
@@ -91,14 +64,8 @@ def build(name, drogue_flag, res, tau, start, end):
     row_drifters = np.bincount(pairs[0], minlength=n_states)
     row_obs = C.sum(axis=1)
 
-    P = np.zeros_like(C)
-    ok = row_obs > 0
-    P[ok] = C[ok] / row_obs[ok, None]
-    # Ocean cells with no outgoing data: hold mass in place (flagged below)
-    empty = np.where(~ok[:n_cells])[0]
-    P[empty, empty] = 1.0
-    # Exit states are absorbing
-    P[n_cells:, n_cells:] = np.eye(len(EXIT_LABELS))
+    # Ocean cells with no outgoing data hold mass in place (flagged below)
+    P, empty = row_normalise(C, n_cells)
 
     flagged = row_drifters[:n_cells] < MIN_DRIFTERS
     out = operator_path(name, res, tau, args.box)
@@ -131,14 +98,14 @@ def build(name, drogue_flag, res, tau, start, end):
 
 ops = {}
 for tau in args.tau:
-    start, end = pairs_at(tau)
+    start, end = pair_indices(traj_idx, t, in_R, tau)
     if len(start) == 0:
         raise SystemExit(f"No pairs at τ = {tau} d: τ must be a multiple of the data's time step.")
     for res in args.res:
         for name, flag in DROGUE_TYPES.items():
             ops[(name, res, tau)] = build(name, flag, res, tau, start, end)
 
-# ── 4. Sanity check: one release off Durban ──────────────────────────────────
+# ── 3. Sanity check: one release off Durban ──────────────────────────────────
 lo, la = TEST_RELEASE
 if LON_MIN <= lo < LON_MAX and LAT_MIN <= la < LAT_MAX:
     print(f"\nSanity check — release at {lo}°E, {abs(la)}°S (off Durban)")
