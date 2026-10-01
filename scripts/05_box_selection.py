@@ -16,7 +16,8 @@ through that edge and its retention would be biased high.
 Observations are hourly (native GDP resolution, gap ≤ 6 h). Boxes that pass
 the data constraints are reduced to the Pareto set on (shipping ↑,
 retention ↑, size ↓) and the best balance of shipping and retention is
-recommended. A fixed set of named options is also scored side by side.
+reported. A fixed set of named options, including the analysis box R, is scored
+side by side.
 """
 
 import os
@@ -53,16 +54,16 @@ MIN_DRIFTERS = 10
 
 # Named options scored side by side (lon_min, lon_max, lat_min, lat_max)
 OPTIONS = {
-    "Current R":                    (5, 50, -50, -20),
+    "Wide southern box":            (5, 50, -50, -20),
     "Shipping-focused":             (10, 55, -41, -15),
     "Shipping-focused + Return Current": (10, 55, -45, -15),
     "Compact core":                 (14, 39, -40, -18),
 }
-# The option the group write-up recommends (highlighted in the figure)
-RECOMMENDED = "Shipping-focused + Return Current"
+# The analysis box R (BOX in scripts/config.py), highlighted in the figure
+CHOSEN = "Shipping-focused + Return Current"
 # Map / scatter style per option: colour, line style, line width, marker
 OPTION_STYLE = {
-    "Current R":                         ("#3a3a3a", "--", 1.8, "s"),
+    "Wide southern box":                 ("#3a3a3a", "--", 1.8, "s"),
     "Shipping-focused":                  ("#7b3294", "-.", 1.8, "D"),
     "Shipping-focused + Return Current": ("#e8710a", "-", 3.0, "*"),
     "Compact core":                      ("#1b9e77", (0, (4, 2)), 1.8, "o"),
@@ -210,7 +211,6 @@ def pick(lo0, lo1, la0, la1):
                  (boxes.lat_min == la0) & (boxes.lat_max == la1)].iloc[0]
 
 
-current = pick(*OPTIONS["Current R"])
 norm = lambda x: (x - x.min()) / (x.max() - x.min() + 1e-12)
 
 feas = boxes[(boxes["obs"] >= MIN_OBS) & (boxes["reliable_frac"] >= MIN_RELIABLE)]
@@ -268,13 +268,13 @@ def outline(bx, color, style, width, label):
 box_label = lambda bx: f"{bx.lon_min:g}–{bx.lon_max:g}°E, {-bx.lat_max:g}–{-bx.lat_min:g}°S"
 for name, (color, style, width, _) in OPTION_STYLE.items():
     bx = pick(*OPTIONS[name])
-    tag = " (recommended)" if name == RECOMMENDED else ""
-    if name != RECOMMENDED:
-        rb = pick(*OPTIONS[RECOMMENDED])
+    tag = " (analysis box R)" if name == CHOSEN else ""
+    if name != CHOSEN:
+        rb = pick(*OPTIONS[CHOSEN])
         shared = [side for side, same in [("W", bx.lon_min == rb.lon_min), ("E", bx.lon_max == rb.lon_max),
                                           ("S", bx.lat_min == rb.lat_min), ("N", bx.lat_max == rb.lat_max)] if same]
-        if len(shared) >= 2:  # outline hidden under the recommended box on those sides
-            tag = f" (shares {'/'.join(shared)} edges with recommended)"
+        if len(shared) >= 2:  # outline hidden under box R on those sides
+            tag = f" (shares {'/'.join(shared)} edges with R)"
     outline(bx, color, style, width, f"{name}{tag}  {box_label(bx)}")
 outline(pd.Series({"lon_min": CORE_LON[0], "lon_max": CORE_LON[1],
                    "lat_min": CORE_LAT[0], "lat_max": CORE_LAT[1]}),
@@ -304,10 +304,10 @@ ax2.set_xlabel("Mean shipping density per ocean cell (relative)")
 ax2.set_ylabel(f"Mean residence time in box (days, from 1-step retention, τ = {TAU_DAYS} d)")
 for name, (color, _, _, marker) in OPTION_STYLE.items():
     bx = pick(*OPTIONS[name])
-    big = name == RECOMMENDED
+    big = name == CHOSEN
     ax2.scatter([bx.ship_per_cell], [bx.residence_days], s=220 if big else 80, marker=marker,
                 c=color, edgecolor="#222222", zorder=6 if big else 5,
-                label=f"{name}{' (recommended)' if big else ''}")
+                label=f"{name}{' (analysis box R)' if big else ''}")
     ax2.annotate(f"{bx.residence_days:.0f} d", (bx.ship_per_cell, bx.residence_days),
                  xytext=(8, -3), textcoords="offset points", fontsize=8, color="#222222",
                  path_effects=[matplotlib.patheffects.withStroke(linewidth=3, foreground="white")])
