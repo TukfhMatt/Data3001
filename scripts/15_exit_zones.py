@@ -1,6 +1,11 @@
 from pathlib import Path
 import csv
+
 import numpy as np
+import matplotlib
+
+matplotlib.use("Agg")
+
 import matplotlib.pyplot as plt
 
 from config import (
@@ -14,26 +19,53 @@ from config import (
 # ============================================================
 # WHOLE-BOX EXIT ZONES
 #
-# Current operator has four absorbing exit states:
-# W, E, S, N
+# The transport operator has four absorbing exit states:
 #
-# For each starting ocean cell:
-# calculate the probability of eventually leaving through
-# each side of the study box.
+#   W, E, S, N
 #
-# Empty rows are treated as unsupported rather than
-# physical permanent states.
+# For each starting ocean cell, estimate the probability
+# that material eventually exits through each side.
+#
+# Empty rows in the saved matrix are self-loops.
+# Here they are treated as unsupported instead of
+# permanent physical states.
 # ============================================================
 
 
-PROJECT_DIR = Path(__file__).resolve().parent.parent
+# ============================================================
+# PATHS
+# ============================================================
 
-DATA_DIR = PROJECT_DIR / "data"
-FIGURE_DIR = PROJECT_DIR / "figures"
+PROJECT_DIR = Path(
+    __file__
+).resolve().parent.parent
 
-DATA_DIR.mkdir(exist_ok=True)
-FIGURE_DIR.mkdir(exist_ok=True)
 
+DATA_DIR = (
+    PROJECT_DIR
+    / "data"
+)
+
+
+FIGURE_DIR = (
+    PROJECT_DIR
+    / "figures"
+)
+
+
+DATA_DIR.mkdir(
+    exist_ok=True
+)
+
+
+FIGURE_DIR.mkdir(
+    exist_ok=True
+)
+
+
+# ============================================================
+# SETTINGS
+# ============================================================
 
 MAX_YEARS = 10
 
@@ -42,13 +74,41 @@ STOP_EPS = 0.00000001
 MIN_RESOLVED = 0.80
 
 
-print("========================================")
-print("WHOLE-BOX EXIT ZONES")
-print("========================================")
+# ============================================================
+# START
+# ============================================================
 
-print("\nRegion:", BOX)
-print("Lag:", TAU_DAYS, "days")
-print("Maximum propagation:", MAX_YEARS, "years")
+print(
+    "========================================"
+)
+
+print(
+    "WHOLE-BOX EXIT ZONES"
+)
+
+print(
+    "========================================"
+)
+
+
+print(
+    "\nRegion:",
+    BOX
+)
+
+
+print(
+    "Lag:",
+    TAU_DAYS,
+    "days"
+)
+
+
+print(
+    "Maximum propagation:",
+    MAX_YEARS,
+    "years"
+)
 
 
 # ============================================================
@@ -61,9 +121,17 @@ try:
 
 except ImportError:
 
-    print("\nERROR: scipy is needed.")
-    print("Run:")
-    print("pip install scipy")
+    print(
+        "\nERROR: scipy is needed."
+    )
+
+    print(
+        "Run:"
+    )
+
+    print(
+        "pip install scipy"
+    )
 
     raise SystemExit
 
@@ -83,10 +151,22 @@ map_data = {}
 
 for res in RESOLUTIONS:
 
-    print("\n\n========================================")
-    print(f"GRID SIZE: {res}°")
-    print("========================================")
+    print(
+        "\n\n========================================"
+    )
 
+    print(
+        f"GRID SIZE: {res}°"
+    )
+
+    print(
+        "========================================"
+    )
+
+
+    # --------------------------------------------------------
+    # MATRIX PATH
+    # --------------------------------------------------------
 
     matrix_name = operator_path(
         "drogued",
@@ -96,19 +176,33 @@ for res in RESOLUTIONS:
     )
 
 
-    matrix_file = PROJECT_DIR / matrix_name
+    matrix_file = (
+        PROJECT_DIR
+        / matrix_name
+    )
 
 
-    print("\nLoading:")
-    print(matrix_file)
+    print(
+        "\nLoading:"
+    )
+
+    print(
+        matrix_file
+    )
 
 
     if not matrix_file.exists():
 
-        print("\nERROR: matrix file not found.")
+        print(
+            "\nERROR: matrix file not found."
+        )
 
         raise SystemExit
 
+
+    # --------------------------------------------------------
+    # LOAD MATRIX
+    # --------------------------------------------------------
 
     data = np.load(
         matrix_file,
@@ -133,51 +227,94 @@ for res in RESOLUTIONS:
 
         if name not in data.files:
 
-            print(f"\nERROR: {name} missing.")
+            print(
+                f"\nERROR: {name} missing."
+            )
 
             raise SystemExit
 
 
     # --------------------------------------------------------
-    # LOAD
+    # VARIABLES
     # --------------------------------------------------------
 
-    P = data["P"]
-
-    row_obs = data["row_obs"]
-
-    row_drifters = data["row_drifters"]
-
-    flagged = data["flagged"].astype(bool)
-
-    empty = data["empty"].astype(bool)
-
-    cells = data["cell_flat"].astype(int)
-
-    lon_edges = data["lon_edges"]
-
-    lat_edges = data["lat_edges"]
-
-    exit_labels = data["exit_labels"].astype(str)
+    P = data[
+        "P"
+    ]
 
 
-    n_cells = len(cells)
+    row_obs = data[
+        "row_obs"
+    ]
 
-    n_exit = len(exit_labels)
+
+    row_drifters = data[
+        "row_drifters"
+    ]
+
+
+    flagged = data[
+        "flagged"
+    ].astype(
+        bool
+    )
+
+
+    empty = data[
+        "empty"
+    ].astype(
+        bool
+    )
+
+
+    cells = data[
+        "cell_flat"
+    ].astype(
+        int
+    )
+
+
+    lon_edges = data[
+        "lon_edges"
+    ]
+
+
+    lat_edges = data[
+        "lat_edges"
+    ]
+
+
+    exit_labels = data[
+        "exit_labels"
+    ].astype(
+        str
+    )
+
+
+    n_cells = len(
+        cells
+    )
+
+
+    n_exit = len(
+        exit_labels
+    )
 
 
     print(
         "\nExit states:",
-        ", ".join(exit_labels)
+        ", ".join(
+            exit_labels
+        )
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SPLIT MATRIX
     #
     # Q = ocean -> ocean
-    # R = ocean -> exit states
-    # --------------------------------------------------------
+    # R = ocean -> absorbing exit states
+    # ========================================================
 
     Q = P[
         :n_cells,
@@ -187,18 +324,21 @@ for res in RESOLUTIONS:
 
     R = P[
         :n_cells,
-        n_cells:n_cells + n_exit
+        n_cells:
+        n_cells + n_exit
     ].copy()
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # REMOVE EMPTY SELF-LOOPS
     #
-    # Saved matrices make empty rows self-loops.
-    # For exit analysis that would artificially trap material.
+    # Empty states have no observed outgoing transitions.
+    # The normal operator gives them a self-loop so P stays
+    # stochastic.
     #
-    # Treat empty states as unsupported instead.
-    # --------------------------------------------------------
+    # For exit analysis this would falsely trap probability.
+    # Treat them as unsupported instead.
+    # ========================================================
 
     Q[
         empty,
@@ -217,16 +357,22 @@ for res in RESOLUTIONS:
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # EVENTUAL EXIT PROBABILITY
     #
-    # F = R + Q R + Q^2 R + ...
+    # Exit probability within k transitions:
     #
-    # Iteratively:
+    # F_k = R + Q R + ... + Q^(k-1) R
+    #
+    # Recurrence:
+    #
+    # F_0 = 0
     # F_(k+1) = R + Q F_k
     #
-    # Also save the result after ~365 days.
-    # --------------------------------------------------------
+    # IMPORTANT:
+    # Starting from zero means step 104 really means
+    # 104 transitions, not 105.
+    # ========================================================
 
     max_steps = int(
         round(
@@ -245,14 +391,38 @@ for res in RESOLUTIONS:
     )
 
 
-    exit_prob = R.copy()
+    model_year_days = (
+        year_steps
+        * TAU_DAYS
+    )
+
+
+    # FIX:
+    # Start from zero, not R.
+    exit_prob = np.zeros_like(
+        R
+    )
+
 
     exit_365 = None
 
     iterations = 0
 
+    last_change = np.nan
 
-    print("\nCalculating exit probabilities...")
+    converged = False
+
+
+    print(
+        "\nCalculating exit probabilities..."
+    )
+
+
+    print(
+        f"1-year snapshot: "
+        f"{year_steps} steps = "
+        f"{model_year_days:.1f} model days"
+    )
 
 
     for step in range(
@@ -266,10 +436,12 @@ for res in RESOLUTIONS:
         )
 
 
-        change = np.max(
-            np.abs(
-                new_exit_prob
-                - exit_prob
+        change = float(
+            np.max(
+                np.abs(
+                    new_exit_prob
+                    - exit_prob
+                )
             )
         )
 
@@ -278,17 +450,35 @@ for res in RESOLUTIONS:
 
         iterations = step
 
+        last_change = change
+
+
+        # ----------------------------------------------------
+        # SAVE ~1 YEAR
+        # ----------------------------------------------------
 
         if step == year_steps:
 
-            exit_365 = exit_prob.copy()
-
-            print(
-                f"  1 year ({step} steps) saved"
+            exit_365 = (
+                exit_prob.copy()
             )
 
 
-        if step % year_steps == 0:
+            print(
+                f"  1 year "
+                f"({step} steps = "
+                f"{model_year_days:.1f} days) saved"
+            )
+
+
+        # ----------------------------------------------------
+        # PRINT ABOUT ONCE PER YEAR
+        # ----------------------------------------------------
+
+        if (
+            step % year_steps
+            == 0
+        ):
 
             years_now = (
                 step
@@ -299,30 +489,51 @@ for res in RESOLUTIONS:
 
             print(
                 f"  {years_now:.1f} years | "
-                f"maximum change {change:.10f}"
+                f"maximum change "
+                f"{change:.10f}"
             )
 
 
-        if change < STOP_EPS:
+        # ----------------------------------------------------
+        # DO NOT STOP BEFORE 1-YEAR RESULT EXISTS
+        # ----------------------------------------------------
+
+        if (
+            step >= year_steps
+            and change < STOP_EPS
+        ):
+
+            converged = True
+
 
             print(
                 "\nExit probabilities converged."
             )
 
+
             break
 
 
+    # --------------------------------------------------------
+    # SAFETY CHECK
+    # --------------------------------------------------------
+
     if exit_365 is None:
 
-        exit_365 = exit_prob.copy()
+        print(
+            "\nERROR: 1-year exit probability was not calculated."
+        )
+
+        raise SystemExit
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # RELIABLE CELLS
-    # --------------------------------------------------------
+    # ========================================================
 
     active = (
-        row_obs > 0
+        row_obs
+        > 0
     )
 
 
@@ -340,14 +551,25 @@ for res in RESOLUTIONS:
     )
 
 
-    # --------------------------------------------------------
+    if n_reliable == 0:
+
+        print(
+            "\nERROR: no reliable cells."
+        )
+
+        raise SystemExit
+
+
+    # ========================================================
     # RESOLVED PROBABILITY
     #
-    # Because unsupported empty states were removed,
-    # some probability may disappear into unsupported cells.
+    # Probability assigned to W/E/S/N after the long
+    # integration.
     #
-    # resolved = probability eventually reaching W/E/S/N
-    # --------------------------------------------------------
+    # Anything left over may represent:
+    #   - transport into unsupported empty cells
+    #   - a very small unexited tail after finite integration
+    # ========================================================
 
     resolved = np.sum(
         exit_prob,
@@ -355,7 +577,8 @@ for res in RESOLUTIONS:
     )
 
 
-    unresolved = (
+    unresolved = np.maximum(
+        0,
         1
         - resolved
     )
@@ -367,10 +590,18 @@ for res in RESOLUTIONS:
     )
 
 
+    unresolved_365 = np.maximum(
+        0,
+        1
+        - resolved_365
+    )
+
+
     good_resolved = (
         reliable
         & (
-            resolved >= MIN_RESOLVED
+            resolved
+            >= MIN_RESOLVED
         )
     )
 
@@ -382,9 +613,9 @@ for res in RESOLUTIONS:
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # DOMINANT EXIT
-    # --------------------------------------------------------
+    # ========================================================
 
     dominant = np.argmax(
         exit_prob,
@@ -398,18 +629,24 @@ for res in RESOLUTIONS:
     )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # CELL CENTRES
-    # --------------------------------------------------------
+    # ========================================================
 
-    n_lon = len(
-        lon_edges
-    ) - 1
+    n_lon = (
+        len(
+            lon_edges
+        )
+        - 1
+    )
 
 
-    n_lat = len(
-        lat_edges
-    ) - 1
+    n_lat = (
+        len(
+            lat_edges
+        )
+        - 1
+    )
 
 
     center_lon = np.zeros(
@@ -431,27 +668,32 @@ for res in RESOLUTIONS:
             % n_lon
         )
 
+
         j = (
             flat_cell
             // n_lon
         )
 
 
-        center_lon[k] = (
+        center_lon[
+            k
+        ] = (
             lon_edges[i]
             + lon_edges[i + 1]
         ) / 2
 
 
-        center_lat[k] = (
+        center_lat[
+            k
+        ] = (
             lat_edges[j]
             + lat_edges[j + 1]
         ) / 2
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SUMMARY
-    # --------------------------------------------------------
+    # ========================================================
 
     reliable_resolved = resolved[
         reliable
@@ -463,6 +705,11 @@ for res in RESOLUTIONS:
     ]
 
 
+    reliable_resolved_365 = resolved_365[
+        reliable
+    ]
+
+
     print(
         f"\nReliable active cells: "
         f"{n_reliable:,}"
@@ -470,7 +717,9 @@ for res in RESOLUTIONS:
 
 
     print(
-        f"Cells with >= {MIN_RESOLVED:.0%} resolved exit probability: "
+        f"Cells with >= "
+        f"{MIN_RESOLVED:.0%} "
+        f"resolved eventual exit probability: "
         f"{n_good_resolved:,} "
         f"({n_good_resolved / n_reliable * 100:.1f}%)"
     )
@@ -483,14 +732,39 @@ for res in RESOLUTIONS:
 
 
     print(
-        f"Median unsupported probability: "
+        f"Median unresolved / unsupported probability: "
         f"{np.median(reliable_unresolved):.1%}"
     )
 
 
-    # --------------------------------------------------------
-    # EXIT SHARE BY STARTING CELL
-    # --------------------------------------------------------
+    print(
+        f"Median resolved probability at "
+        f"{model_year_days:.1f} days: "
+        f"{np.median(reliable_resolved_365):.1%}"
+    )
+
+
+    print(
+        f"Iterations used: "
+        f"{iterations:,}"
+    )
+
+
+    print(
+        f"Final maximum change: "
+        f"{last_change:.10f}"
+    )
+
+
+    print(
+        f"Converged: "
+        f"{converged}"
+    )
+
+
+    # ========================================================
+    # DOMINANT EVENTUAL EXIT
+    # ========================================================
 
     print(
         "\n--- Dominant eventual exit side ---"
@@ -543,9 +817,9 @@ for res in RESOLUTIONS:
         )
 
 
-    # --------------------------------------------------------
-    # MEAN EXIT PROBABILITY
-    # --------------------------------------------------------
+    # ========================================================
+    # MEAN EVENTUAL EXIT PROBABILITY
+    # ========================================================
 
     print(
         "\n--- Mean eventual exit probability ---"
@@ -565,13 +839,17 @@ for res in RESOLUTIONS:
         ]
 
 
-        mean_value = np.mean(
-            values
+        mean_value = float(
+            np.mean(
+                values
+            )
         )
 
 
-        median_value = np.median(
-            values
+        median_value = float(
+            np.median(
+                values
+            )
         )
 
 
@@ -587,25 +865,36 @@ for res in RESOLUTIONS:
         )
 
 
-    # --------------------------------------------------------
-    # 365-DAY EXIT PROBABILITY
-    # --------------------------------------------------------
+    # ========================================================
+    # APPROXIMATELY ONE-YEAR EXIT PROBABILITY
+    # ========================================================
 
     print(
-        "\n--- Mean exit probability after 365 days ---"
+        f"\n--- Mean exit probability after "
+        f"{model_year_days:.1f} model days ---"
     )
+
+
+    mean_probs_365 = {}
 
 
     for side_number, label in enumerate(
         exit_labels
     ):
 
-        value = np.mean(
-            exit_365[
-                reliable,
-                side_number
-            ]
+        value = float(
+            np.mean(
+                exit_365[
+                    reliable,
+                    side_number
+                ]
+            )
         )
+
+
+        mean_probs_365[
+            label
+        ] = value
 
 
         print(
@@ -614,17 +903,20 @@ for res in RESOLUTIONS:
         )
 
 
-    # --------------------------------------------------------
-    # STRONGEST FEEDER CELLS FOR EACH EXIT
-    # --------------------------------------------------------
+    # ========================================================
+    # STRONGEST FEEDER CELLS
+    #
+    # Only use reliable cells with enough eventual fate
+    # resolved into W/E/S/N.
+    # ========================================================
 
     print(
         "\n--- Strongest feeder cells by exit side ---"
     )
 
 
-    reliable_idx = np.where(
-        reliable
+    good_idx = np.where(
+        good_resolved
     )[0]
 
 
@@ -637,10 +929,21 @@ for res in RESOLUTIONS:
         )
 
 
-        order = reliable_idx[
+        if len(
+            good_idx
+        ) == 0:
+
+            print(
+                "No sufficiently resolved reliable cells."
+            )
+
+            continue
+
+
+        order = good_idx[
             np.argsort(
                 exit_prob[
-                    reliable_idx,
+                    good_idx,
                     side_number
                 ]
             )[::-1]
@@ -662,9 +965,9 @@ for res in RESOLUTIONS:
             )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # SAVE PER-CELL CSV
-    # --------------------------------------------------------
+    # ========================================================
 
     tag = (
         f"{res:g}"
@@ -700,8 +1003,11 @@ for res in RESOLUTIONS:
             "distinct_drifters",
             "flagged",
             "empty",
+            "reliable",
             "resolved_probability",
-            "unsupported_probability",
+            "unresolved_probability",
+            "resolved_probability_1yr",
+            "unresolved_probability_1yr",
             "dominant_exit"
         ]
 
@@ -710,6 +1016,13 @@ for res in RESOLUTIONS:
 
             header.append(
                 f"exit_{label}_prob"
+            )
+
+
+        for label in exit_labels:
+
+            header.append(
+                f"exit_{label}_prob_1yr"
             )
 
 
@@ -722,23 +1035,65 @@ for res in RESOLUTIONS:
             n_cells
         ):
 
+            # Do not assign a fake dominant W label
+            # to unsupported / unresolved rows.
+
+            if (
+                reliable[k]
+                and resolved[k]
+                >= MIN_RESOLVED
+            ):
+
+                dominant_name = (
+                    exit_labels[
+                        dominant[k]
+                    ]
+                )
+
+            else:
+
+                dominant_name = ""
+
+
             row = [
                 center_lon[k],
                 center_lat[k],
-                int(row_obs[k]),
-                int(row_drifters[k]),
-                bool(flagged[k]),
-                bool(empty[k]),
+                int(
+                    row_obs[k]
+                ),
+                int(
+                    row_drifters[k]
+                ),
+                bool(
+                    flagged[k]
+                ),
+                bool(
+                    empty[k]
+                ),
+                bool(
+                    reliable[k]
+                ),
                 resolved[k],
                 unresolved[k],
-                exit_labels[
-                    dominant[k]
-                ]
+                resolved_365[k],
+                unresolved_365[k],
+                dominant_name
             ]
 
 
             row.extend(
-                exit_prob[k, :]
+                exit_prob[
+                    k,
+                    :
+                ]
+            )
+
+
+            row.extend(
+                exit_365[
+                    k,
+                    :
+                ]
             )
 
 
@@ -747,31 +1102,54 @@ for res in RESOLUTIONS:
             )
 
 
-    # --------------------------------------------------------
+    # ========================================================
     # STORE SUMMARY
-    # --------------------------------------------------------
+    # ========================================================
 
     results[
         res
     ] = {
 
-        "reliable": n_reliable,
+        "reliable":
+            n_reliable,
 
-        "good_resolved": n_good_resolved,
+        "good_resolved":
+            n_good_resolved,
 
         "median_resolved":
-            np.median(
-                reliable_resolved
+            float(
+                np.median(
+                    reliable_resolved
+                )
+            ),
+
+        "median_resolved_365":
+            float(
+                np.median(
+                    reliable_resolved_365
+                )
             ),
 
         "mean_probs":
             mean_probs,
 
+        "mean_probs_365":
+            mean_probs_365,
+
         "side_counts":
             side_counts,
 
         "iterations":
-            iterations
+            iterations,
+
+        "final_change":
+            last_change,
+
+        "converged":
+            converged,
+
+        "model_year_days":
+            model_year_days
     }
 
 
@@ -852,13 +1230,15 @@ for res in RESOLUTIONS:
             "side_counts"
         ]:
 
-            pct = r[
-                "side_counts"
-            ][
-                label
-            ][
-                1
-            ]
+            pct = (
+                r[
+                    "side_counts"
+                ][
+                    label
+                ][
+                    1
+                ]
+            )
 
         else:
 
@@ -908,12 +1288,20 @@ with open(
             "grid_deg",
             "reliable_cells",
             "cells_ge80pct_resolved",
-            "median_resolved_probability",
-            "mean_W_probability",
-            "mean_E_probability",
-            "mean_S_probability",
-            "mean_N_probability",
-            "iterations"
+            "median_eventual_resolved_probability",
+            "median_1yr_resolved_probability",
+            "mean_eventual_W_probability",
+            "mean_eventual_E_probability",
+            "mean_eventual_S_probability",
+            "mean_eventual_N_probability",
+            "mean_1yr_W_probability",
+            "mean_1yr_E_probability",
+            "mean_1yr_S_probability",
+            "mean_1yr_N_probability",
+            "one_year_model_days",
+            "iterations",
+            "final_max_change",
+            "converged"
         ]
     )
 
@@ -928,14 +1316,78 @@ with open(
         writer.writerow(
             [
                 res,
-                r["reliable"],
-                r["good_resolved"],
-                r["median_resolved"],
-                r["mean_probs"].get("W", 0),
-                r["mean_probs"].get("E", 0),
-                r["mean_probs"].get("S", 0),
-                r["mean_probs"].get("N", 0),
-                r["iterations"]
+                r[
+                    "reliable"
+                ],
+                r[
+                    "good_resolved"
+                ],
+                r[
+                    "median_resolved"
+                ],
+                r[
+                    "median_resolved_365"
+                ],
+                r[
+                    "mean_probs"
+                ].get(
+                    "W",
+                    0
+                ),
+                r[
+                    "mean_probs"
+                ].get(
+                    "E",
+                    0
+                ),
+                r[
+                    "mean_probs"
+                ].get(
+                    "S",
+                    0
+                ),
+                r[
+                    "mean_probs"
+                ].get(
+                    "N",
+                    0
+                ),
+                r[
+                    "mean_probs_365"
+                ].get(
+                    "W",
+                    0
+                ),
+                r[
+                    "mean_probs_365"
+                ].get(
+                    "E",
+                    0
+                ),
+                r[
+                    "mean_probs_365"
+                ].get(
+                    "S",
+                    0
+                ),
+                r[
+                    "mean_probs_365"
+                ].get(
+                    "N",
+                    0
+                ),
+                r[
+                    "model_year_days"
+                ],
+                r[
+                    "iterations"
+                ],
+                r[
+                    "final_change"
+                ],
+                r[
+                    "converged"
+                ]
             ]
         )
 
@@ -946,226 +1398,279 @@ with open(
 
 res = 1.0
 
-m = map_data[
-    res
-]
 
+if res not in map_data:
 
-cells = m[
-    "cells"
-]
-
-lon_edges = m[
-    "lon_edges"
-]
-
-lat_edges = m[
-    "lat_edges"
-]
-
-dominant = m[
-    "dominant"
-]
-
-resolved = m[
-    "resolved"
-]
-
-reliable = m[
-    "reliable"
-]
-
-
-n_lon = len(
-    lon_edges
-) - 1
-
-
-n_lat = len(
-    lat_edges
-) - 1
-
-
-grid = np.full(
-    n_lon * n_lat,
-    np.nan
-)
-
-
-map_cells = (
-    reliable
-    & (
-        resolved >= MIN_RESOLVED
+    print(
+        "\nWARNING: 1 degree matrix was not analysed."
     )
-)
+
+else:
+
+    m = map_data[
+        res
+    ]
 
 
-grid[
-    cells[
+    cells = m[
+        "cells"
+    ]
+
+
+    lon_edges = m[
+        "lon_edges"
+    ]
+
+
+    lat_edges = m[
+        "lat_edges"
+    ]
+
+
+    dominant = m[
+        "dominant"
+    ]
+
+
+    resolved = m[
+        "resolved"
+    ]
+
+
+    reliable = m[
+        "reliable"
+    ]
+
+
+    n_lon = (
+        len(
+            lon_edges
+        )
+        - 1
+    )
+
+
+    n_lat = (
+        len(
+            lat_edges
+        )
+        - 1
+    )
+
+
+    grid = np.full(
+        n_lon
+        * n_lat,
+        np.nan
+    )
+
+
+    map_cells = (
+        reliable
+        & (
+            resolved
+            >= MIN_RESOLVED
+        )
+    )
+
+
+    grid[
+        cells[
+            map_cells
+        ]
+    ] = dominant[
         map_cells
     ]
-] = dominant[
-    map_cells
-]
 
 
-grid = grid.reshape(
-    n_lat,
-    n_lon
-)
-
-
-plot_file = (
-    FIGURE_DIR
-    / "dominant_exit_zone_1deg.png"
-)
-
-
-try:
-
-    import cartopy.crs as ccrs
-    import cartopy.feature as cfeature
-
-    from matplotlib.patches import Patch
-
-
-    fig = plt.figure(
-        figsize=(10, 7)
+    grid = grid.reshape(
+        n_lat,
+        n_lon
     )
 
 
-    ax = plt.axes(
-        projection=ccrs.PlateCarree()
+    plot_file = (
+        FIGURE_DIR
+        / "dominant_exit_zone_1deg.png"
     )
 
 
-    cmap = plt.get_cmap(
-        "tab10",
-        4
-    )
+    try:
+
+        import cartopy.crs as ccrs
+        import cartopy.feature as cfeature
+
+        from matplotlib.patches import Patch
 
 
-    mesh = ax.pcolormesh(
-        lon_edges,
-        lat_edges,
-        grid,
-        cmap=cmap,
-        vmin=-0.5,
-        vmax=3.5,
-        transform=ccrs.PlateCarree()
-    )
-
-
-    ax.set_extent(
-        [
-            BOX[0],
-            BOX[1],
-            BOX[2],
-            BOX[3]
-        ],
-        crs=ccrs.PlateCarree()
-    )
-
-
-    ax.add_feature(
-        cfeature.LAND
-    )
-
-
-    ax.coastlines(
-        linewidth=0.7
-    )
-
-
-    gl = ax.gridlines(
-        draw_labels=True,
-        linewidth=0.3,
-        alpha=0.5
-    )
-
-
-    gl.top_labels = False
-
-    gl.right_labels = False
-
-
-    handles = []
-
-
-    labels_for_map = [
-        "W",
-        "E",
-        "S",
-        "N"
-    ]
-
-
-    for number, label in enumerate(
-        labels_for_map
-    ):
-
-        handles.append(
-            Patch(
-                color=cmap(number),
-                label=label
+        fig = plt.figure(
+            figsize=(
+                10,
+                7
             )
         )
 
 
-    ax.legend(
-        handles=handles,
-        title="Dominant exit",
-        loc="lower left"
-    )
+        ax = plt.axes(
+            projection=ccrs.PlateCarree()
+        )
 
 
-except ImportError:
-
-    fig, ax = plt.subplots(
-        figsize=(10, 7)
-    )
-
-
-    mesh = ax.pcolormesh(
-        lon_edges,
-        lat_edges,
-        grid,
-        cmap=plt.get_cmap(
+        cmap = plt.get_cmap(
             "tab10",
             4
-        ),
-        vmin=-0.5,
-        vmax=3.5
+        )
+
+
+        mesh = ax.pcolormesh(
+            lon_edges,
+            lat_edges,
+            grid,
+            cmap=cmap,
+            vmin=-0.5,
+            vmax=3.5,
+            shading="auto",
+            transform=ccrs.PlateCarree()
+        )
+
+
+        ax.set_extent(
+            [
+                BOX[0],
+                BOX[1],
+                BOX[2],
+                BOX[3]
+            ],
+            crs=ccrs.PlateCarree()
+        )
+
+
+        ax.add_feature(
+            cfeature.LAND
+        )
+
+
+        ax.coastlines(
+            linewidth=0.7
+        )
+
+
+        gl = ax.gridlines(
+            draw_labels=True,
+            linewidth=0.3,
+            alpha=0.5
+        )
+
+
+        gl.top_labels = False
+
+        gl.right_labels = False
+
+
+        handles = []
+
+
+        labels_for_map = [
+            "W",
+            "E",
+            "S",
+            "N"
+        ]
+
+
+        for number, label in enumerate(
+            labels_for_map
+        ):
+
+            handles.append(
+                Patch(
+                    color=cmap(
+                        number
+                    ),
+                    label=label
+                )
+            )
+
+
+        ax.legend(
+            handles=handles,
+            title="Dominant exit",
+            loc="lower left"
+        )
+
+
+    except ImportError:
+
+        fig, ax = plt.subplots(
+            figsize=(
+                10,
+                7
+            )
+        )
+
+
+        cmap = plt.get_cmap(
+            "tab10",
+            4
+        )
+
+
+        mesh = ax.pcolormesh(
+            lon_edges,
+            lat_edges,
+            grid,
+            cmap=cmap,
+            vmin=-0.5,
+            vmax=3.5,
+            shading="auto"
+        )
+
+
+        ax.set_xlabel(
+            "Longitude"
+        )
+
+
+        ax.set_ylabel(
+            "Latitude"
+        )
+
+
+        ax.set_xlim(
+            BOX[0],
+            BOX[1]
+        )
+
+
+        ax.set_ylim(
+            BOX[2],
+            BOX[3]
+        )
+
+
+    ax.set_title(
+        "Dominant Eventual Exit Side — 1° Drogued Matrix"
     )
 
 
-    ax.set_xlabel(
-        "Longitude"
+    plt.tight_layout()
+
+
+    plt.savefig(
+        plot_file,
+        dpi=300,
+        bbox_inches="tight"
     )
 
 
-    ax.set_ylabel(
-        "Latitude"
+    plt.close(
+        fig
     )
 
 
-plt.title(
-    "Dominant Eventual Exit Side — 1° Drogued Matrix"
-)
-
-
-plt.tight_layout()
-
-
-plt.savefig(
-    plot_file,
-    dpi=300,
-    bbox_inches="tight"
-)
-
-
-plt.close()
-
+# ============================================================
+# DONE
+# ============================================================
 
 print(
     "\nSaved:"
@@ -1175,9 +1680,13 @@ print(
     summary_file
 )
 
-print(
-    plot_file
-)
+
+if 1.0 in map_data:
+
+    print(
+        FIGURE_DIR
+        / "dominant_exit_zone_1deg.png"
+    )
 
 
 print(
