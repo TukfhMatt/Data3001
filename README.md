@@ -65,6 +65,9 @@ python scripts/07_wind_slip.py             # undrogued − drogued slip per cell
 python scripts/08_fetch_era5.py            # ERA5 winds at drifter positions (needs ~/.cdsapirc)
 python scripts/09_oil_wind.py              # oil matrix: undrogued + missing windage (+ drogued check)
 python scripts/10_validation.py            # held-out validation, 5-fold by drifter
+python scripts/11_whole_box_analysis.py     # grid support across 0.5°, 1° and 2°
+python scripts/12_coastal_coverage.py       # coastal-cell data support
+python scripts/13_trap_stability.py         # 365-day retention hotspots and grid stability
 ```
 
 Scripts `01`–`04` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1°, 2°; τ = 3.5 days):
@@ -92,6 +95,9 @@ python scripts/04_shipping_overlay.py --res 1 --tau 3.5                         
 | `08_fetch_era5.py` | Requests ERA5 10 m winds from the Copernicus CDS API one year at a time, interpolates them to every drifter position and deletes the raw year; needs a CDS account, the ERA5 licence and `~/.cdsapirc` | `data/drifter_wind10m.nc` |
 | `09_oil_wind.py` | Oil matrix: undrogued transitions moved by the windage they lack (3.5% minus their measured windage) × the ERA5 wind along each 3.5-day path; a drogued + 3.5% check matrix; comparison at the release points | `data/P_oil_…npz`, `data/P_oil_check_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png` |
 | `10_validation.py` | Held-out validation, 5-fold by drifter: position error against persistence and mean-current advection, log score against climatology, exit calibration | `data/validation_summary_…csv`, `figures/agulhas_validation_…png` |
+| `11_whole_box_analysis.py` | Checks outgoing-transition and distinct-drifter support across the 0.5°, 1° and 2° drogued matrices. Reports active/empty cells, transition-count thresholds, independent drifter support and flagged low-support rows. | `data/whole_box_grid_support.csv`, `figures/whole_box_transition_support.png`, `figures/whole_box_drifter_support.png` |
+| `12_coastal_coverage.py` | Identifies ocean-state cells intersecting the Natural Earth 10 m coastline and measures coastal transition and drifter support at all three grid sizes. | `data/coastal_grid_support.csv`, `figures/coastal_drifter_support.png` |
+| `13_trap_stability.py` | Uses 365-day in-box retention as a hotspot score, excludes empty and flagged rows, selects the top 10% reliable cells, and compares hotspot locations across grid sizes using Jaccard and overlap coefficients. | `data/retention_hotspot_summary.csv`, `data/retention_hotspot_stability.csv` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix, plus the pairing and counting helpers shared by `03` and `06` | — |
 
@@ -106,12 +112,23 @@ curl -L -o data/shipping/shipdensity_commercial.zip \
 `notebooks/01_agulhas_gdp_exploration.ipynb` is not part of the pipeline and does not run on this setup; use the scripts.
 
 ---
+## SQ2 whole-box feasibility
+
+Whole-box transition support is strong across all three drogued-grid resolutions. Among active cells, 97.6% of 0.5° cells, 99.4% of 1° cells and 99.6% of 2° cells have at least 50 outgoing transitions. The median numbers of outgoing transitions are 432, 1,750 and 6,395 per active cell, respectively.
+
+Independent drifter support is more sensitive to grid resolution. The share of active cells supported by at least 10 distinct drifters is 51.6% at 0.5°, 78.1% at 1° and 88.8% at 2°. Correspondingly, 48.4%, 21.9% and 11.2% of active rows are flagged as having fewer than 10 distinct drifters. This supports 1° as the main analysis grid, with 2° as a coarser robustness check; the 0.5° grid is substantially more weakly sampled.
+
+Coastal cells are less well sampled than the box as a whole. At 1°, 93.2% of active coastal cells still have at least 50 outgoing transitions, but only 39.2% have at least 10 distinct drifters. At 2°, these figures improve to 97.9% and 52.1%, respectively. Coastal conclusions should therefore be interpreted more cautiously, especially at finer resolution.
+
+Long-term retention analysis identifies a recurring high-retention region in the western Indian Ocean, approximately around 41–45°E and 29–33°S. The top-10% 365-day retention hotspots show relatively strong agreement between the 1° and 2° grids (48.7% Jaccard similarity; 73.3% overlap coefficient), but substantially weaker agreement involving the 0.5° grid (15.9% Jaccard for 0.5° vs 1°, and 12.0% for 0.5° vs 2°). This is consistent with the much weaker independent-drifter support at 0.5°.
+
+Overall, SQ2 is well supported for broad offshore transport and retention analysis at 1°–2° resolution. The 0.5° grid is useful as a sensitivity case but is too sparsely supported to claim stable fine-scale traps, and coastal results require additional caution.
 
 ## Using the transition matrix
 
 Each `.npz` file is a self-contained operator. `P[i, j]` is the probability that material in state `i` is in state `j` one lag τ later (`tau_days`).
 
-- **States `0 … n_cells − 1`**: ocean cells of R (1,112 at 1°; the mapping to the grid is in `cell_flat`).
+- **States `0 … n_cells − 1`**: ocean cells of R (970 at 1°; the mapping to the grid is in `cell_flat`).
 - **Last 4 states**: absorbing "exited R" states, in the order of `exit_labels` (`W`, `E`, `S`, `N`).
 
 ```python
