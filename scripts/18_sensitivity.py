@@ -22,7 +22,7 @@ number of cells.
 
 Needs 03 (every setting), 06 (reference) and 10 (every setting) first.
 
-    .venv/bin/python scripts/11_sensitivity.py
+    .venv/bin/python scripts/18_sensitivity.py
 """
 
 import numpy as np
