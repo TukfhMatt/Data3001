@@ -69,9 +69,9 @@ Release points: 5 hotspots plus the busiest reliable shipping cells (`scripts/04
 For each: map of the probability distribution after 1 week, 1 month and 1 year, plus the fraction left in R, where it exited and how much stranded, with bootstrap intervals.
 
 Whole-box structure:
-- Where R gathers material: stationary / quasi-stationary distribution (leading left eigenvector of P, conditioned on staying in R); high values = accumulation zones.
-- Where R loses material: exit rate per cell (the exit columns), and residence time (expected steps before leaving).
-- Which parts feed which: eigenvectors near eigenvalue 1 / spectral clustering → almost-invariant sets (regions that mostly keep material to themselves = "cut off"); flows between clusters show who feeds whom.
+- Where R holds material: the share released in each cell still afloat in R after a year; the top 10% of reliable cells are retention hotspots, checked across grids and with a drifter bootstrap.
+- Where R loses material: residence time (expected time before leaving or stranding) and the eventual fate (which edge, or stranded) of each cell, both exact from the absorbing chain's fundamental matrix N = (I − Q)⁻¹.
+- Which parts keep material to themselves: spectral clustering of the symmetrised transition matrix → almost-invariant regions, checked with the directional P against longitude bands of the same sizes.
 - Source vs sink cells: row and column sums of P.
 
 
@@ -151,7 +151,10 @@ Progress:
   - The slip follows the winds: eastward under the westerlies south of ~38°S, west-north-westward under the south-east trades at 20–33°S, northward along the west coast. It is weakest at 30–40°S, under the subtropical high.
   - Single cells are noisy (drogued and undrogued drifters pass at different times; median per-cell slip 12.9 cm/s against a median drogued current of 21.4 cm/s), so band and block means are the robust result.
   - Outputs: `data/wind_slip_cells_1deg_10E-55E_45S-15S.csv`, `data/wind_slip_bands_…csv`, `figures/agulhas_wind_slip_…png`.
-- [ ] Release-point maps at 1 week / 1 month / 1 year.
+- [x] Release-point maps at 1 week / 1 month / 1 year — `scripts/17_release_point_maps.py` (1°, τ = 3.5 d): one figure per point from `04`, drogued and undrogued, with the share afloat in R, each exit and stranded, and 95% intervals from `06`.
+  - Durban (drogued) after a year: 19% (14–26%) still in R, 51% (43–59%) left east, 22% (15–29%) west, as expected.
+  - Undrogued material strands far more than drogued: after a year 24–66% from the Mozambique Channel lane and the lanes south of Madagascar (drogued 0–2%), and 36–38% from Cape Town and Durban with wide intervals (5–64%), since coastal stranding rests on a few grounded drifters (see the oil version).
+  - Outputs: `data/release_point_maps_1deg_3p5d_10E-55E_45S-15S.csv`, `figures/agulhas_release_{nn}_{point}_…png`.
 - [x] Held-out validation — `scripts/10_validation.py` (1°, τ = 3.5 d, 5-fold by drifter: 817 drogued / 1,170 undrogued drifters each held out once; daily test starts followed at whole τ steps, exits and stranding absorbing).
 
     | Type | Horizon | Test starts | Markov error | Advection (cell centre) | Persistence (cell centre) | Log score Markov / climatology | Exit pred / obs | Stranded pred / obs |
@@ -203,7 +206,13 @@ Progress:
   - The added windage moves oil out of R faster than undrogued material: after a year 1–21% is still afloat in R from the lanes and 0–8% from the hotspots (undrogued 3–43% and 0–16%). These one-year shares are much better constrained than stranding (intervals about ±5 points, in `oil_compare_…csv`), oil is below undrogued wherever any remains, and the two intervals do not overlap at Algoa Bay, Richards Bay and every lane except 40.5°E, 16.5°S (they overlap there and at Durban). Surface oil left after weathering: 61% at 7 days, 12% at 30 days.
   - The oil and check matrices differ by TVD 0.20–0.52 at 30 days. Most of the gap at Durban, Cape Town and the Mozambique Channel lane is stranding, which the drogued data barely contains (see `03`); for oil still afloat the two agree within 0.16–0.28 everywhere except the Mozambique Channel lane (0.37), where drogued rows are thin. The oil matrix is the working version.
   - Outputs: `data/P_oil_1deg_3p5d_10E-55E_45S-15S.npz`, `data/P_oil_check_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png`.
-- [ ] Eigen / clustering analysis for whole-box structure.
+- [x] Whole-box structure — `scripts/11`–`16` (all grids at τ = 3.5 d, both drogue types; numbers below at 1°, drogued / undrogued, over reliable cells).
+  - Support (`11`, `12`): 78% / 93% of active rows reliable (0.5°: 52% / 90%; 2°: 89% / 94%). Coastal cells (land neighbour on the grid): 33% / 47% reliable, against 82% / 98% offshore.
+  - Retention hotspots (`13`): drogued at 41–44°E, 30–33°S, 67–69% still in R after a year (95% intervals about 52–75%); 71 of 75 hotspot cells stay in the top 10% in ≥ 50% of 1,000 drifter resamples. Undrogued at 48–51°E, 30–33°S, 55–56% (49–60%), 88 of 90 stable. Where both grids are reliable, 1° and 2° hotspots agree (Jaccard 66% / 73%); 0.5° drogued agrees less (30–36%).
+  - Residence time (`14`): mean 233 / 203 days, median 230 / 213, longest in the hotspots (539 / 459 days); grids within about 40 days.
+  - Exit zones (`15`): eventual fate E 71% / 62%, W 20% / 17%, S 7% / 4%, N 2% / 3%, stranded 0.7% / 15%; east is the most likely fate in 83% / 75% of cells, stranding in 11% of undrogued cells (Mozambique Channel coast, east of Madagascar).
+  - Almost-invariant regions (`16`): four for both drogue types (retroflection and Atlantic side; Natal coast and Mozambique Channel; south of Madagascar and Return Current; east of Madagascar), keeping 81–94% over one step, 55–70% over 30 days and 1–9% over a year. Three keep 13–23 points more over 30 days than longitude bands of the same sizes; the western one matches its band. The eigenvalues fall off smoothly, so four regions is a choice.
+  - Outputs: `data/whole_box_support_…csv`, `data/coastal_support_…csv`, `data/retention_*_…csv`, `data/residence_time_*…csv`, `data/exit_zones_*…csv`, `data/almost_invariant_*…csv` and the matching `figures/agulhas_*` maps.
 
 Open questions:
 - At 1° the drogued matrix has 24% of rows flagged (< 10 drifters) and 26% unstable under the bootstrap, mostly in the Mozambique Channel and south of Madagascar. Merge or smooth thin cells there?

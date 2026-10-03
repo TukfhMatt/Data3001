@@ -12,9 +12,14 @@ States 0..n_cells-1 are ocean grid cells in R; the last five are absorbing,
 in the order of op["exit_labels"]: left R across the W, E, S or N edge, and
 "stranded" (ran aground on a coast inside R).
 
+cell_centres, reliable and absorption serve the whole-box analysis (11–17):
+absorption gives each cell's expected time in R and eventual exit or
+stranding exactly, from the fundamental matrix.
+
 The building helpers at the end (strand_times, move_indices,
 transition_states, row_normalise) are shared by every script that builds a
-matrix (03, 06, 09, 10), so all builds match 03 exactly.
+matrix (03, 06, 09, 10, 13), so all builds match 03 exactly; drifter_counts
+and resampled_counts redraw whole drifters for a bootstrap.
 """
 
 import numpy as np
@@ -79,6 +84,37 @@ def coastal_states(op):
         for di in (-1, 0, 1):
             land_nb |= pad[1 + dj: 1 + dj + n_lat, 1 + di: 1 + di + n_lon]
     return (ocean & land_nb).ravel()[op["cell_flat"]]
+
+
+def cell_centres(op):
+    """(lon, lat) of each ocean state's cell centre; a partial cell at the box
+    edge is centred on its clipped extent."""
+    n_lon = len(op["lon_edges"]) - 1
+    j, i = np.divmod(op["cell_flat"], n_lon)
+    lo, la = op["lon_edges"], op["lat_edges"]
+    return (lo[i] + lo[i + 1]) / 2, (la[j] + la[j + 1]) / 2
+
+
+def reliable(op):
+    """Boolean per ocean state: its row rests on its own moves from at least
+    MIN_DRIFTERS drifters (neither flagged nor empty)."""
+    return ~op["flagged"].astype(bool) & ~op["empty"].astype(bool)
+
+
+def absorption(op):
+    """Exact long-run fate of material starting in each ocean state, from the
+    absorbing chain's fundamental matrix N = (I − Q)⁻¹, where Q is the
+    ocean → ocean block of P and R the ocean → absorbing block:
+      steps — expected number of τ steps taken until it leaves the ocean
+              states, counting the step in which it leaves (N·1)
+      fate  — probability of ending in each absorbing state (N·R), columns
+              in the order of op["exit_labels"]."""
+    n = len(op["cell_flat"])
+    P = op["P"]
+    X = np.linalg.solve(np.eye(n) - P[:n, :n], np.column_stack([np.ones(n), P[:n, n:]]))
+    if np.abs(X[:, 1:].sum(axis=1) - 1).max() > 1e-6:
+        raise ValueError("some ocean states never reach an absorbing state")
+    return X[:, 0], X[:, 1:]
 
 
 # ── Building helpers ─────────────────────────────────────────────────────────
@@ -176,3 +212,21 @@ def row_normalise(C, cells, n_lon, max_ring=3):
             P[st, st] = 1.0
     P[n_cells:, n_cells:] = np.eye(C.shape[0] - n_cells)
     return P, empty
+
+
+def drifter_counts(traj, from_state, to_state, n_states):
+    """Moves grouped into unique (drifter, from, to) triples, so a bootstrap
+    can reweight whole drifters: (drifter number 0..n_drifters−1 per triple,
+    flat index from·n_states + to, move count, n_drifters)."""
+    key = traj.astype(np.int64) * n_states**2 + from_state * n_states + to_state
+    uniq, n = np.unique(key, return_counts=True)
+    drifters, d_idx = np.unique(uniq // n_states**2, return_inverse=True)
+    return d_idx, uniq % n_states**2, n, len(drifters)
+
+
+def resampled_counts(counts, n_states, rng):
+    """Count matrix C from one bootstrap draw of whole drifters (with
+    replacement) over the triples from drifter_counts."""
+    d_idx, ft, n, n_drifters = counts
+    w = np.bincount(rng.integers(n_drifters, size=n_drifters), minlength=n_drifters)
+    return np.bincount(ft, weights=n * w[d_idx], minlength=n_states**2).reshape(n_states, n_states)

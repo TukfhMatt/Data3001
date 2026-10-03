@@ -30,8 +30,8 @@ from matplotlib.colors import LinearSegmentedColormap
 import xarray as xr
 
 from config import DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
-from transport import (EXIT_LABELS, coastal_states, load_operator, move_indices, row_normalise,
-                       state_of, strand_times, transition_states)
+from transport import (EXIT_LABELS, coastal_states, drifter_counts, load_operator, move_indices,
+                       resampled_counts, row_normalise, state_of, strand_times, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -77,18 +77,12 @@ steps_30 = steps[30]
 
 
 # ── 2. Per-drifter transition counts ─────────────────────────────────────────
-def drifter_counts(flag):
-    """Unique (drifter, from, to) triples with counts, for one drogue type.
-    Summing them over drifters gives the count matrix C behind P."""
+def counts_for(flag):
+    """Per-drifter move counts for one drogue type (transport.drifter_counts)."""
     same = (drogue[start] == flag) & (drogue[end] == flag)
     s, e = start[same], end[same]
     f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box, stranded[same])
-    key = traj_idx[s].astype(np.int64) * n_states**2 + f * n_states + to
-    uniq, n = np.unique(key, return_counts=True)
-    d = uniq // n_states**2
-    ft = uniq % n_states**2
-    drifters, d_idx = np.unique(d, return_inverse=True)
-    return d_idx, ft, n, len(drifters)
+    return drifter_counts(traj_idx[s], f, to, n_states)
 
 
 def fates(P):
@@ -112,7 +106,8 @@ def fates(P):
 # ── 3. Bootstrap by drifter ──────────────────────────────────────────────────
 estimate, boots, row_tvd = {}, {}, {}
 for name, flag in DROGUE_TYPES.items():
-    d_idx, ft, n, n_drifters = drifter_counts(flag)
+    counts = counts_for(flag)
+    _, ft, n, n_drifters = counts
     C = np.bincount(ft, weights=n, minlength=n_states**2).reshape(n_states, n_states)
     assert np.array_equal(C, ops[name]["C"]), f"rebuilt counts differ from the saved {name} matrix"
     P = ops[name]["P"]
@@ -121,9 +116,7 @@ for name, flag in DROGUE_TYPES.items():
     samples = {k: np.empty((N_BOOT, len(release_states))) for k in estimate[name]}
     tvd = np.empty((N_BOOT, n_cells))
     for b in range(N_BOOT):
-        w = np.bincount(rng.integers(n_drifters, size=n_drifters), minlength=n_drifters)
-        Cb = np.bincount(ft, weights=n * w[d_idx], minlength=n_states**2).reshape(n_states, n_states)
-        Pb, _ = row_normalise(Cb, cells, n_lon)
+        Pb, _ = row_normalise(resampled_counts(counts, n_states, rng), cells, n_lon)
         tvd[b] = 0.5 * np.abs(Pb[:n_cells] - P[:n_cells]).sum(axis=1)
         for k, v in fates(Pb).items():
             samples[k][b] = v

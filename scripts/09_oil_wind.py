@@ -44,9 +44,9 @@ from matplotlib.colors import LogNorm
 import xarray as xr
 
 from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
-from transport import (EXIT_LABELS, STRANDED, coastal_states, load_operator, move_indices,
-                       propagate, release, row_normalise, state_of, strand_times, to_grid,
-                       transition_states)
+from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
+                       move_indices, propagate, release, resampled_counts, row_normalise, state_of,
+                       strand_times, to_grid, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -211,11 +211,7 @@ def build(name, drogue_flag, alpha):
     print(f"Mean exit prob / step: {P[:n_cells, n_cells:n_cells + STRANDED].sum(axis=1).mean():.1%}; "
           f"stranding {P[:n_cells, n_cells + STRANDED].mean():.2%} ({k.sum():,} stranding moves)")
     print(f"Saved → {out}")
-    # Unique (drifter, from, to) triples with counts, for the bootstrap (as in 06)
-    key = traj_idx[s].astype(np.int64) * n_states**2 + from_state * n_states + to_state
-    uniq, cnt = np.unique(key, return_counts=True)
-    _, d_idx = np.unique(uniq // n_states**2, return_inverse=True)
-    return out, {"d_idx": d_idx, "ft": uniq % n_states**2, "n": cnt, "drifter": uniq // n_states**2}
+    return out, drifter_counts(traj_idx[s], from_state, to_state, n_states)
 
 
 path_a, counts_a = build("oil", False, alpha_extra)
@@ -246,20 +242,15 @@ def oil_fates(P):
 
 # Drifter bootstrap of the oil matrix, as 06 does for drogued and undrogued
 boot = np.empty((N_BOOT, 2, len(release_states)))
-n_drift = counts_a["d_idx"].max() + 1
 for b in range(N_BOOT):
-    w = np.bincount(rng.integers(n_drift, size=n_drift), minlength=n_drift)
-    Cb = np.bincount(counts_a["ft"], weights=counts_a["n"] * w[counts_a["d_idx"]],
-                     minlength=n_states**2).reshape(n_states, n_states)
-    boot[b] = oil_fates(row_normalise(Cb, cells, n_lon)[0])
+    boot[b] = oil_fates(row_normalise(resampled_counts(counts_a, n_states, rng), cells, n_lon)[0])
 oil_lo, oil_hi = np.percentile(boot, [2.5, 97.5], axis=0)
-print(f"\nOil matrix: {n_drift:,} drifters resampled {N_BOOT} times")
+print(f"\nOil matrix: {counts_a[3]:,} drifters resampled {N_BOOT} times")
 
 # Grounded drifters behind each release cell's own stranding moves (the same
 # moves in the undrogued and oil matrices, since stranding moves are not shifted)
-strand_to = n_cells + STRANDED
-grounded = [len(np.unique(counts_a["drifter"][(counts_a["ft"] // n_states == st)
-                                              & (counts_a["ft"] % n_states == strand_to)]))
+d_idx, ft = counts_a[0], counts_a[1]
+grounded = [len(np.unique(d_idx[(ft // n_states == st) & (ft % n_states == n_cells + STRANDED)]))
             for st in release_states]
 
 # Undrogued intervals come from 06
