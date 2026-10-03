@@ -4,7 +4,7 @@ Instructions for AI coding agents working in this repository. Read [README.md](R
 
 ## Project in one paragraph
 
-A university data science project (Data3001) that builds a surface-transport operator for the Agulhas region, box R = 10–55°E, 45–15°S (scored on data, shipping risk and retention in `05_box_selection.py`). NOAA Global Drifter Program tracks are binned on a grid (0.5°, 1° and 2°), and cell-to-cell moves over a lag τ (default 3.5 days) are counted into a row-stochastic transition matrix (Ulam's method). Two versions are tracked side by side: drogued drifters (15 m current, passive transport) and undrogued drifters (surface current plus about 1% wind slip, the closer match to oil). Never pool them into an "all drifters" matrix. The matrices are iterated to answer where material released at a point is after 1 week, 1 month and 1 year, and to analyse where R gathers and loses material.
+A university data science project (Data3001) that builds a surface-transport operator for the Agulhas region, box R = 10–55°E, 45–15°S (scored on data, shipping risk and retention in `05_box_selection.py`). NOAA Global Drifter Program tracks are binned on a grid (0.5°, 1° and 2°), and cell-to-cell moves over a lag τ (default 3.5 days) are counted into a row-stochastic transition matrix (Ulam's method). Two versions are tracked side by side: drogued drifters (15 m current, passive transport) and undrogued drifters (surface current plus about 2% windage, the closer match to oil), and an oil matrix built from undrogued moves shifted by the missing windage (`09`). Never pool them into an "all drifters" matrix. The matrices are iterated to answer where material released at a point is after 1 week, 1 month and 1 year, and to analyse where R gathers and loses material.
 
 ## Environment
 
@@ -47,7 +47,7 @@ Files are `data/P_{drogued|undrogued}_{res}deg_{tau}d_{box}.npz`, built by `conf
 
 ## Domain notes
 
-- Drogued = passive water transport (little windage, e.g. a mostly submerged container). Undrogued drifters slip downwind by ~10 cm/s (~1% of wind speed), measured as undrogued − drogued mean velocity per cell. Oil moves at current + about 3–3.5% of wind speed, so undrogued captures only about a third of oil's windage. Do not add the full 3.5% wind on top of undrogued motion; that counts the wind twice.
+- Drogued = passive water transport (little windage, e.g. a mostly submerged container). Undrogued drifters slip downwind by ~10 cm/s, measured as undrogued − drogued mean velocity per cell (`07`); against ERA5 winds that is 2.0% of the 10 m wind (`09`). Oil moves at current + 3.5% of wind speed, so `09` adds only the missing 1.5%. Do not add the full 3.5% wind on top of undrogued motion; that counts the wind twice. The oil matrices are `operator_path("oil", …)` and `operator_path("oil_check", …)` (drogued + 3.5%, a check only).
 - Pooling drogued and undrogued ("all drifters") gives a matrix whose wind effect varies with the local undrogued share (46–84% per cell), so it represents neither; do not use it.
 - Oil mass loss is modelled as `m(t) = m0 · exp(−λt)`, with λ ≈ 1/14 per day as the working value.
 - Velocity decorrelation time over the core region (10–40°E, 45–25°S) is about 1.4 days (drogued) and 1.2 days (undrogued), which is why τ = 3.5 days. Sensitivity checks use τ = 2 and 5 days.

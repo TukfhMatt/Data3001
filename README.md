@@ -30,9 +30,9 @@ The box balances shipping risk against oil retention (scored in `05_box_selectio
 
 - Drifters are split by **drogue status**, and a matrix is built for each:
   - **Drogued**: a sea anchor at 15 m is attached, so the drifter follows the near-surface current with little wind effect. This is passive water transport (e.g. a submerged container).
-  - **Undrogued**: the drogue has been lost, so the drifter rides at the surface and slips downwind by about 10 cm/s (roughly 1% of wind speed: eastward under the westerlies, north-westward under the trades). Closest match to oil, but oil drifts at about 3–3.5% of wind speed, so this is a partial wind effect.
+  - **Undrogued**: the drogue has been lost, so the drifter rides at the surface and slips downwind by about 10 cm/s (2.0% of the ERA5 10 m wind: eastward under the westerlies, north-westward under the trades). Closest match to oil, but oil drifts at about 3.5% of wind speed, so the oil matrix adds the missing 1.5%.
   - The two are not pooled: an "all drifters" matrix mixes 46–84% undrogued data depending on the cell, so its wind effect would follow sampling history rather than physics.
-- Planned: ERA5 10 m winds (Copernicus Climate Data Store) for the oil and life-raft windage models.
+- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`08`, `09`). Planned: a life-raft version with its own windage.
 
 ---
 
@@ -91,7 +91,7 @@ python scripts/04_shipping_overlay.py --res 1 --tau 3.5                         
 | `06_bootstrap.py` | Resamples whole drifters 1,000 times per drogue type, rebuilds the matrix each time and re-propagates the release points from `04`: 95% intervals on each point's fate (still in R, exits, stranded, 30-day coastal exposure), whether drogued and undrogued differ, and how stable each row is (median bootstrap TVD) | `data/bootstrap_release_*.csv`, `data/bootstrap_difference_*.csv`, `data/bootstrap_rows_*.npz`, `figures/agulhas_bootstrap_fates_*.png`, `figures/agulhas_bootstrap_rows_*.png` |
 | `07_wind_slip.py` | Undrogued − drogued mean velocity per cell (the extra surface wind drift undrogued drifters carry), latitude-band means with 95% intervals from resampling whole drifters | `figures/agulhas_wind_slip_{res}deg_{box}.png`, `data/wind_slip_cells_…csv`, `data/wind_slip_bands_…csv` |
 | `08_fetch_era5.py` | Requests ERA5 10 m winds from the Copernicus CDS API one year at a time, interpolates them to every drifter position and deletes the raw year; needs a CDS account, the ERA5 licence and `~/.cdsapirc` | `data/drifter_wind10m.nc` |
-| `09_oil_wind.py` | Oil matrix: undrogued transitions moved by the windage they lack (3.5% minus their measured windage) × the ERA5 wind along each 3.5-day path; a drogued + 3.5% check matrix; comparison at the release points | `data/P_oil_…npz`, `data/P_oil_check_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png` |
+| `09_oil_wind.py` | Oil matrix: undrogued transitions moved by the windage they lack (3.5% minus their measured windage) × the ERA5 wind along each 3.5-day path; a drogued + 3.5% check matrix; comparison at the release points, with drifter-bootstrap intervals and the number of grounded drifters behind each stranding share | `data/P_oil_…npz`, `data/P_oil_check_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png` |
 | `10_validation.py` | Held-out validation, 5-fold by drifter: position error against persistence and mean-current advection, log score against climatology, exit and stranding calibration | `data/validation_summary_…csv`, `figures/agulhas_validation_…png` |
 | `11_sensitivity.py` | Compares the reference (1°, τ = 3.5 d) with τ = 2 and 5 days and with 0.5° and 2° grids: held-out skill from `10` at common horizons, and the release points' one-year fates against the reference's bootstrap interval from `06` | `data/sensitivity_skill_{box}.csv`, `data/sensitivity_fates_{box}.csv`, `figures/agulhas_sensitivity_{box}.png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
@@ -152,7 +152,7 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Drifter bootstrap: 95% intervals on release-point fates, drogued vs undrogued differences, row stability
 - [ ] Release-point maps at 1 week, 1 month, 1 year
 - [x] Held-out validation (5-fold by drifter): calibrated exits and stranding, beats persistence and mean-current advection by 28 days
-- [ ] Sensitivity to τ and grid size
+- [x] Sensitivity to τ and grid size: τ = 2–5 days gives the same results; 1° is used (0.5° adds no skill and has 50% thin drogued rows, 2° loses short-range skill and shifts one-year fates)
 - [ ] Seasonal matrices
-- [ ] Oil version with ERA5 winds and mass decay
+- [x] ERA5 winds at every drifter position; oil matrix = undrogued + the missing 1.5% windage (undrogued carries 2.0%), with a drogued + 3.5% check
 - [ ] Whole-box analysis: accumulation zones, exit zones, residence time, almost-invariant regions
