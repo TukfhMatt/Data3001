@@ -57,6 +57,14 @@ def box_tag(box):
     return f"{lo(box[0])}-{lo(box[1])}_{la(box[2])}-{la(box[3])}"
 
 
+def setting_tag(res, tau, box):
+    """File tag for one or several grids and lags, so outputs of different
+    settings never overwrite each other, e.g. '1deg_3p5d_10E-55E_45S-15S' or
+    '0p5-1-2deg_3p5d_10E-55E_45S-15S'."""
+    join = lambda xs: "-".join(_tag(x) for x in np.atleast_1d(xs))
+    return f"{join(res)}deg_{join(tau)}d_{box_tag(box)}"
+
+
 def operator_path(name, res, tau, box):
     """Saved transition matrix for one drogue type, grid, lag and region."""
     return f"data/P_{name}_{_tag(res)}deg_{_tag(tau)}d_{box_tag(box)}.npz"

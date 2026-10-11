@@ -18,3 +18,6 @@ figures/
 # OS
 .DS_Store
 
+
+# graphify knowledge graph (regenerable)
+graphify-out/

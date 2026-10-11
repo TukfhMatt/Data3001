@@ -1,1388 +1,172 @@
-from pathlib import Path
-import csv
+"""
+Agulhas Region — Almost-Invariant Regions
+Splits R into regions that exchange little material with each other over a
+step, from the transition matrix of each drogue type (reliable cells only):
+
+  1. affinity    — A = ½ (Q + Qᵀ) between reliable cells, self-moves removed,
+                   normalised as S = D^(−½) A D^(−½)
+  2. how many    — N_REGIONS regions. The leading eigenvalues of S fall off
+                   smoothly, with no clear gap to fix the number, so it is a
+                   choice; the eigenvalues and gaps are printed for checking
+  3. clustering  — rows of the k leading eigenvectors, scaled to unit length,
+                   split by k-means (best of N_STARTS random starts)
+  4. validation  — with the directional P: the share of material that stays
+                   in its region after one step, 30 days and 365 days, from a
+                   uniform start over the region; and the same 30-day share
+                   for longitude bands of the same sizes, as a baseline any
+                   compact region would reach
+
+Regions are numbered west to east. This is a spectral-clustering
+approximation to almost-invariant sets, not an exact PCCA+ decomposition.
+
+Needs the matrices from 03.
+
+    .venv/bin/python scripts/16_almost_invariant_regions.py --res 1 --tau 3.5
+"""
+
+import os
+
 import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
+from matplotlib.colors import BoundaryNorm, ListedColormap
+from scipy.sparse.linalg import eigsh
 
-from config import (
-    BOX,
-    TAU_DAYS,
-    operator_path
-)
+from config import DROGUE_TYPES, operator_path, parse_args, setting_tag
+from transport import cell_centres, load_operator, reliable, to_grid
 
-
-# ============================================================
-# ALMOST-INVARIANT REGIONS
-#
-# Baseline:
-#   drogued
-#   1 degree
-#   tau = 3.5 days
-#
-# Method:
-#   1. Keep reliable active ocean cells
-#   2. Build symmetric transport affinity
-#   3. Use spectral embedding
-#   4. Cluster cells into candidate regions
-#   5. Test each region using the original directional P
-#
-# Output:
-#   - region summary CSV
-#   - cell labels CSV
-#   - map of candidate regions
-# ============================================================
-
-
-# ============================================================
-# SETTINGS
-# ============================================================
-
-PROJECT_DIR = Path(__file__).resolve().parent.parent
-
-DATA_DIR = PROJECT_DIR / "data"
-FIGURE_DIR = PROJECT_DIR / "figures"
-
-DATA_DIR.mkdir(exist_ok=True)
-FIGURE_DIR.mkdir(exist_ok=True)
-
-
-RES = 1.0
-
+args = parse_args(__doc__, grid=True, lag=True)
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
+RES, TAU = args.res, args.tau
+TAG = setting_tag(RES, TAU, args.box)
 N_REGIONS = 4
+N_EIG = 8                       # eigenvalues printed
+N_STARTS = 20
+KMEANS_ITER = 200
+SEED = 3001
+CHECK_DAYS = [30, 365]
+REGION_COLORS = ["#2a78d6", "#eb6834", "#1b9e77", "#7b3294", "#e6ab02", "#666666"]
 
-RANDOM_SEED = 3001
-
-KMEANS_ITER = 100
-
-
-# ============================================================
-# START
-# ============================================================
-
-print("========================================")
-print("ALMOST-INVARIANT REGIONS")
-print("========================================")
-
-print("\nRegion:", BOX)
-print("Grid:", RES, "degree")
-print("Lag:", TAU_DAYS, "days")
-print("Candidate regions:", N_REGIONS)
+os.makedirs("figures", exist_ok=True)
+rng = np.random.default_rng(SEED)
 
 
-# ============================================================
-# SCIPY
-# ============================================================
+def kmeans(x, k):
+    """Best of N_STARTS k-means runs (lowest within-cluster sum of squares)."""
+    best, best_cost = None, np.inf
+    for _ in range(N_STARTS):
+        centres = x[rng.choice(len(x), k, replace=False)]
+        for _ in range(KMEANS_ITER):
+            lab = np.argmin(((x[:, None, :] - centres[None]) ** 2).sum(axis=2), axis=1)
+            new = np.array([x[lab == g].mean(axis=0) if np.any(lab == g) else x[rng.integers(len(x))]
+                            for g in range(k)])
+            if np.allclose(new, centres):
+                break
+            centres = new
+        cost = ((x - centres[lab]) ** 2).sum()
+        if cost < best_cost:
+            best, best_cost = lab, cost
+    return best
 
+
+def stay(P, members, steps):
+    """Share of a uniform start over `members` that is in `members` after `steps`."""
+    p = np.zeros(P.shape[0])
+    p[members] = 1 / len(members)
+    for _ in range(steps):
+        p = p @ P
+    return p[members].sum()
+
+
+# ── 1. Spectral regions per drogue type ──────────────────────────────────────
+summary, cells_out, maps = [], [], {}
+for name in DROGUE_TYPES:
+    op = load_operator(operator_path(name, RES, TAU, args.box))
+    P = op["P"]
+    n = len(op["cell_flat"])
+    ok = reliable(op)
+    idx = np.where(ok)[0]
+    Q = P[np.ix_(idx, idx)]
+    A = (Q + Q.T) / 2
+    np.fill_diagonal(A, 0)
+    d = A.sum(axis=1)
+    s = 1 / np.sqrt(np.where(d > 0, d, 1))
+    vals, vecs = eigsh(s[:, None] * A * s[None, :], k=N_EIG, which="LA")
+    order = np.argsort(vals)[::-1]
+    vals, vecs = vals[order], vecs[:, order]
+    gaps = vals[:-1] - vals[1:]                     # gaps[k − 1]: after the k-th eigenvalue
+    k = N_REGIONS
+    emb = vecs[:, :k] / np.maximum(np.linalg.norm(vecs[:, :k], axis=1, keepdims=True), 1e-12)
+    lab = kmeans(emb, k)
+
+    lon, lat = cell_centres(op)
+    west_to_east = np.argsort([lon[idx][lab == g].mean() for g in range(k)])
+    lab = np.argsort(west_to_east)[lab]
+    region = np.full(n, -1)
+    region[idx] = lab
+
+    # Longitude bands over the same reliable cells, with the same sizes
+    bands = np.full(n, -1)
+    by_lon = idx[np.argsort(lon[idx], kind="stable")]
+    edges = np.r_[0, np.cumsum([np.sum(lab == g) for g in range(k)])]
+    for g in range(k):
+        bands[by_lon[edges[g]:edges[g + 1]]] = g
+
+    steps = {dd: int(round(dd / TAU)) for dd in CHECK_DAYS}
+    print(f"\n{name}: {len(idx)} reliable cells; leading eigenvalues "
+          + ", ".join(f"{v:.4f}" for v in vals)
+          + f"\n  gaps after the 2nd–7th: " + ", ".join(f"{g:.4f}" for g in gaps[1:7])
+          + f"; {k} regions")
+    print(f"  {'region':>6}{'cells':>7}{'centre':>16}{'1 step':>8}{'30 d':>7}{'365 d':>7}{'band 30 d':>11}")
+    for g in range(k):
+        m = np.where(region == g)[0]
+        row = {"drogue": name, "region": g + 1, "cells": len(m), "lon": lon[m].mean(), "lat": lat[m].mean(),
+               "median_drifters": np.median(op["row_drifters"][m]),
+               "one_step": P[np.ix_(m, m)].sum(axis=1).mean(),
+               "band_30d": stay(P, np.where(bands == g)[0], steps[30]), "k": k, "gap_after_k": gaps[k - 1]}
+        for dd in CHECK_DAYS:
+            row[f"stay_{dd}d"] = stay(P, m, steps[dd])
+        summary.append(row)
+        print(f"  {g + 1:>6}{len(m):>7}{row['lon']:>8.1f}°E {-row['lat']:>4.1f}°S{row['one_step']:>8.0%}"
+              f"{row['stay_30d']:>7.0%}{row['stay_365d']:>7.0%}{row['band_30d']:>11.0%}")
+    cells_out.append(pd.DataFrame({"drogue": name, "lon": lon, "lat": lat, "reliable": ok,
+                                   "region": np.where(region >= 0, region + 1, 0)}))
+    maps[name] = (op, np.where(region >= 0, region, np.nan), k)
+
+out_summary = f"data/almost_invariant_regions_{TAG}.csv"
+out_cells = f"data/almost_invariant_cells_{TAG}.csv"
+pd.DataFrame(summary).to_csv(out_summary, index=False)
+pd.concat(cells_out).to_csv(out_cells, index=False)
+
+# ── 2. Map ───────────────────────────────────────────────────────────────────
 try:
-
-    from scipy.sparse import csr_matrix
-    from scipy.sparse.linalg import eigsh
-
-except ImportError:
-
-    print("\nERROR: scipy is needed.")
-    print("Run:")
-    print("pip install scipy")
-
-    raise SystemExit
-
-
-# ============================================================
-# LOAD MATRIX
-# ============================================================
-
-matrix_name = operator_path(
-    "drogued",
-    RES,
-    TAU_DAYS,
-    BOX
-)
-
-
-matrix_file = (
-    PROJECT_DIR
-    / matrix_name
-)
-
-
-print("\nLoading:")
-print(matrix_file)
-
-
-if not matrix_file.exists():
-
-    print("\nERROR: matrix file not found.")
-
-    raise SystemExit
-
-
-data = np.load(
-    matrix_file,
-    allow_pickle=True
-)
-
-
-needed = [
-    "P",
-    "row_obs",
-    "row_drifters",
-    "flagged",
-    "empty",
-    "cell_flat",
-    "lon_edges",
-    "lat_edges"
-]
-
-
-for name in needed:
-
-    if name not in data.files:
-
-        print(
-            f"\nERROR: {name} missing."
-        )
-
-        raise SystemExit
-
-
-# ============================================================
-# LOAD VARIABLES
-# ============================================================
-
-P = data["P"]
-
-row_obs = data["row_obs"]
-
-row_drifters = data["row_drifters"]
-
-flagged = data["flagged"].astype(bool)
-
-empty = data["empty"].astype(bool)
-
-cells = data["cell_flat"].astype(int)
-
-lon_edges = data["lon_edges"]
-
-lat_edges = data["lat_edges"]
-
-
-n_cells = len(cells)
-
-n_states = P.shape[0]
-
-
-print(
-    f"\nOcean cells: {n_cells:,}"
-)
-
-print(
-    f"Total states: {n_states:,}"
-)
-
-
-# ============================================================
-# RELIABLE CELLS
-# ============================================================
-
-active = (
-    row_obs > 0
-)
-
-
-reliable = (
-    active
-    & ~flagged
-    & ~empty
-)
-
-
-reliable_idx = np.where(
-    reliable
-)[0]
-
-
-n_reliable = len(
-    reliable_idx
-)
-
-
-print(
-    f"Reliable active cells: {n_reliable:,}"
-)
-
-
-if n_reliable <= N_REGIONS:
-
-    print(
-        "\nERROR: not enough reliable cells."
-    )
-
-    raise SystemExit
-
-
-# ============================================================
-# CELL CENTRES
-# ============================================================
-
-n_lon = (
-    len(lon_edges)
-    - 1
-)
-
-
-n_lat = (
-    len(lat_edges)
-    - 1
-)
-
-
-center_lon = np.zeros(
-    n_cells
-)
-
-
-center_lat = np.zeros(
-    n_cells
-)
-
-
-for k, flat_cell in enumerate(
-    cells
-):
-
-    i = (
-        flat_cell
-        % n_lon
-    )
-
-    j = (
-        flat_cell
-        // n_lon
-    )
-
-
-    center_lon[k] = (
-        lon_edges[i]
-        + lon_edges[i + 1]
-    ) / 2
-
-
-    center_lat[k] = (
-        lat_edges[j]
-        + lat_edges[j + 1]
-    ) / 2
-
-
-# ============================================================
-# OCEAN TRANSITION MATRIX
-# ============================================================
-
-Q = P[
-    :n_cells,
-    :n_cells
-]
-
-
-Q_reliable = Q[
-    np.ix_(
-        reliable_idx,
-        reliable_idx
-    )
-]
-
-
-# ============================================================
-# TRANSPORT AFFINITY
-#
-# P is directional.
-#
-# For spectral clustering, make a symmetric matrix:
-#
-# A(i,j) = 0.5 * (Q(i,j) + Q(j,i))
-#
-# This matrix is only used to FIND candidate regions.
-#
-# Later we use the original directional P to test whether
-# each region really retains material.
-# ============================================================
-
-print(
-    "\nBuilding transport affinity matrix..."
-)
-
-
-A = (
-    Q_reliable
-    + Q_reliable.T
-) / 2
-
-
-# Remove self-transition for clustering
-
-np.fill_diagonal(
-    A,
-    0
-)
-
-
-degree = np.sum(
-    A,
-    axis=1
-)
-
-
-zero_degree = (
-    degree <= 0
-)
-
-
-if np.any(
-    zero_degree
-):
-
-    print(
-        "WARNING:",
-        np.count_nonzero(zero_degree),
-        "cells have zero affinity."
-    )
-
-
-safe_degree = np.where(
-    degree > 0,
-    degree,
-    1
-)
-
-
-d_inv_sqrt = (
-    1
-    / np.sqrt(
-        safe_degree
-    )
-)
-
-
-# Normalised symmetric matrix:
-#
-# S = D^(-1/2) A D^(-1/2)
-
-S = (
-    d_inv_sqrt[:, None]
-    * A
-    * d_inv_sqrt[None, :]
-)
-
-
-S_sparse = csr_matrix(
-    S
-)
-
-
-# ============================================================
-# SPECTRAL EMBEDDING
-# ============================================================
-
-print(
-    "\nCalculating leading eigenvectors..."
-)
-
-
-eigenvalues, eigenvectors = eigsh(
-    S_sparse,
-    k=N_REGIONS,
-    which="LA"
-)
-
-
-# Sort biggest to smallest
-
-eigen_order = np.argsort(
-    eigenvalues
-)[::-1]
-
-
-eigenvalues = eigenvalues[
-    eigen_order
-]
-
-
-eigenvectors = eigenvectors[
-    :,
-    eigen_order
-]
-
-
-print(
-    "\nLeading eigenvalues:"
-)
-
-
-for number, value in enumerate(
-    eigenvalues,
-    start=1
-):
-
-    print(
-        f"{number}: {value:.6f}"
-    )
-
-
-# ============================================================
-# NORMALISE EMBEDDING
-# ============================================================
-
-row_norm = np.linalg.norm(
-    eigenvectors,
-    axis=1
-)
-
-
-row_norm = np.where(
-    row_norm > 0,
-    row_norm,
-    1
-)
-
-
-embedding = (
-    eigenvectors
-    / row_norm[:, None]
-)
-
-
-# ============================================================
-# SIMPLE K-MEANS
-# ============================================================
-
-print(
-    "\nClustering spectral coordinates..."
-)
-
-
-rng = np.random.default_rng(
-    RANDOM_SEED
-)
-
-
-start_points = rng.choice(
-    n_reliable,
-    size=N_REGIONS,
-    replace=False
-)
-
-
-centres = embedding[
-    start_points
-].copy()
-
-
-labels = np.full(
-    n_reliable,
-    -1,
-    dtype=int
-)
-
-
-for iteration in range(
-    KMEANS_ITER
-):
-
-    dist = np.zeros(
-        (
-            n_reliable,
-            N_REGIONS
-        )
-    )
-
-
-    for group in range(
-        N_REGIONS
-    ):
-
-        diff = (
-            embedding
-            - centres[group]
-        )
-
-
-        dist[
-            :,
-            group
-        ] = np.sum(
-            diff * diff,
-            axis=1
-        )
-
-
-    new_labels = np.argmin(
-        dist,
-        axis=1
-    )
-
-
-    if np.array_equal(
-        new_labels,
-        labels
-    ):
-
-        print(
-            f"K-means converged after "
-            f"{iteration} iterations."
-        )
-
-        break
-
-
-    labels = new_labels
-
-
-    new_centres = centres.copy()
-
-
-    for group in range(
-        N_REGIONS
-    ):
-
-        members = (
-            labels == group
-        )
-
-
-        if np.any(
-            members
-        ):
-
-            new_centres[
-                group
-            ] = np.mean(
-                embedding[
-                    members
-                ],
-                axis=0
-            )
-
-        else:
-
-            random_cell = rng.integers(
-                0,
-                n_reliable
-            )
-
-
-            new_centres[
-                group
-            ] = embedding[
-                random_cell
-            ]
-
-
-    centres = new_centres
-
-
-else:
-
-    print(
-        "K-means reached maximum iterations."
-    )
-
-
-# ============================================================
-# RENAME REGIONS WEST -> EAST
-#
-# Cluster labels are arbitrary.
-#
-# Renumber them by their mean longitude so Region 1 is
-# generally the western-most region.
-# ============================================================
-
-old_mean_lon = []
-
-
-for group in range(
-    N_REGIONS
-):
-
-    members = reliable_idx[
-        labels == group
-    ]
-
-
-    if len(
-        members
-    ) > 0:
-
-        value = np.mean(
-            center_lon[
-                members
-            ]
-        )
-
-    else:
-
-        value = np.inf
-
-
-    old_mean_lon.append(
-        value
-    )
-
-
-west_to_east = np.argsort(
-    old_mean_lon
-)
-
-
-rename = {}
-
-
-for new_group, old_group in enumerate(
-    west_to_east
-):
-
-    rename[
-        old_group
-    ] = new_group
-
-
-labels = np.array(
-    [
-        rename[x]
-        for x in labels
-    ]
-)
-
-
-# ============================================================
-# FULL REGION LABEL ARRAY
-# ============================================================
-
-region_label = np.full(
-    n_cells,
-    -1,
-    dtype=int
-)
-
-
-region_label[
-    reliable_idx
-] = labels
-
-
-# ============================================================
-# VALIDATE REGIONS
-#
-# Use ORIGINAL directional P.
-#
-# Check:
-#   one step
-#   30 days
-#   365 days
-#
-# For 30d / 365d, start uniformly across the cells
-# belonging to each candidate region.
-# ============================================================
-
-steps_30 = int(
-    round(
-        30
-        / TAU_DAYS
-    )
-)
-
-
-steps_365 = int(
-    round(
-        365
-        / TAU_DAYS
-    )
-)
-
-
-print(
-    "\nCalculating 30-day matrix..."
-)
-
-
-P30 = np.linalg.matrix_power(
-    P,
-    steps_30
-)
-
-
-print(
-    "Calculating 365-day matrix..."
-)
-
-
-P365 = np.linalg.matrix_power(
-    P,
-    steps_365
-)
-
-
-print(
-    "\n========================================"
-)
-
-print(
-    "REGION RETENTION RESULTS"
-)
-
-print(
-    "========================================"
-)
-
-
-print(
-    "\nRegion | Cells | Mean lon | Mean lat | "
-    "Drifters | 1-step | 30-day | 365-day"
-)
-
-
-region_results = {}
-
-
-# ============================================================
-# ANALYSE EACH REGION
-# ============================================================
-
-for group in range(
-    N_REGIONS
-):
-
-    member_idx = np.where(
-        region_label == group
-    )[0]
-
-
-    n_member = len(
-        member_idx
-    )
-
-
-    if n_member == 0:
-
-        print(
-            f"\nWARNING: Region {group + 1} is empty."
-        )
-
-        continue
-
-
-    # --------------------------------------------------------
-    # ONE-STEP INTERNAL RETENTION
-    # --------------------------------------------------------
-
-    region_block = P[
-        np.ix_(
-            member_idx,
-            member_idx
-        )
-    ]
-
-
-    one_step_by_cell = np.sum(
-        region_block,
-        axis=1
-    )
-
-
-    one_step = np.mean(
-        one_step_by_cell
-    )
-
-
-    # --------------------------------------------------------
-    # START UNIFORMLY OVER REGION
-    # --------------------------------------------------------
-
-    p0 = np.zeros(
-        n_states
-    )
-
-
-    p0[
-        member_idx
-    ] = (
-        1
-        / n_member
-    )
-
-
-    # --------------------------------------------------------
-    # 30 DAYS
-    # --------------------------------------------------------
-
-    p30 = (
-        p0
-        @ P30
-    )
-
-
-    stay_30 = np.sum(
-        p30[
-            member_idx
-        ]
-    )
-
-
-    inside_box_30 = np.sum(
-        p30[
-            :n_cells
-        ]
-    )
-
-
-    # --------------------------------------------------------
-    # 365 DAYS
-    # --------------------------------------------------------
-
-    p365 = (
-        p0
-        @ P365
-    )
-
-
-    stay_365 = np.sum(
-        p365[
-            member_idx
-        ]
-    )
-
-
-    inside_box_365 = np.sum(
-        p365[
-            :n_cells
-        ]
-    )
-
-
-    # --------------------------------------------------------
-    # LOCATION
-    # --------------------------------------------------------
-
-    mean_lon = np.mean(
-        center_lon[
-            member_idx
-        ]
-    )
-
-
-    mean_lat = np.mean(
-        center_lat[
-            member_idx
-        ]
-    )
-
-
-    # --------------------------------------------------------
-    # DATA SUPPORT
-    # --------------------------------------------------------
-
-    mean_drifters = np.mean(
-        row_drifters[
-            member_idx
-        ]
-    )
-
-
-    median_drifters = np.median(
-        row_drifters[
-            member_idx
-        ]
-    )
-
-
-    mean_transitions = np.mean(
-        row_obs[
-            member_idx
-        ]
-    )
-
-
-    # --------------------------------------------------------
-    # SAVE
-    # --------------------------------------------------------
-
-    region_results[
-        group
-    ] = {
-
-        "cells":
-            n_member,
-
-        "mean_lon":
-            mean_lon,
-
-        "mean_lat":
-            mean_lat,
-
-        "mean_drifters":
-            mean_drifters,
-
-        "median_drifters":
-            median_drifters,
-
-        "mean_transitions":
-            mean_transitions,
-
-        "one_step":
-            one_step,
-
-        "stay30":
-            stay_30,
-
-        "inside30":
-            inside_box_30,
-
-        "stay365":
-            stay_365,
-
-        "inside365":
-            inside_box_365
-    }
-
-
-    print(
-        f"{group + 1:>6} | "
-        f"{n_member:>5} | "
-        f"{mean_lon:>8.2f} | "
-        f"{mean_lat:>8.2f} | "
-        f"{median_drifters:>8.0f} | "
-        f"{one_step:>6.1%} | "
-        f"{stay_30:>6.1%} | "
-        f"{stay_365:>7.1%}"
-    )
-
-
-# ============================================================
-# REGION DETAILS
-# ============================================================
-
-print(
-    "\n========================================"
-)
-
-print(
-    "REGION DETAILS"
-)
-
-print(
-    "========================================"
-)
-
-
-for group in range(
-    N_REGIONS
-):
-
-    if group not in region_results:
-
-        continue
-
-
-    r = region_results[
-        group
-    ]
-
-
-    print(
-        f"\nRegion {group + 1}"
-    )
-
-
-    print(
-        f"Cells: "
-        f"{r['cells']}"
-    )
-
-
-    print(
-        f"Mean centre: "
-        f"{r['mean_lon']:.2f}°E, "
-        f"{abs(r['mean_lat']):.2f}°S"
-    )
-
-
-    print(
-        f"Mean transitions/cell: "
-        f"{r['mean_transitions']:.0f}"
-    )
-
-
-    print(
-        f"Median distinct drifters/cell: "
-        f"{r['median_drifters']:.0f}"
-    )
-
-
-    print(
-        f"One-step internal retention: "
-        f"{r['one_step']:.1%}"
-    )
-
-
-    print(
-        f"30-day probability still in same region: "
-        f"{r['stay30']:.1%}"
-    )
-
-
-    print(
-        f"30-day probability still anywhere in R: "
-        f"{r['inside30']:.1%}"
-    )
-
-
-    print(
-        f"365-day probability still in same region: "
-        f"{r['stay365']:.1%}"
-    )
-
-
-    print(
-        f"365-day probability still anywhere in R: "
-        f"{r['inside365']:.1%}"
-    )
-
-
-# ============================================================
-# SAVE REGION SUMMARY
-# ============================================================
-
-summary_file = (
-    DATA_DIR
-    / "almost_invariant_region_summary.csv"
-)
-
-
-with open(
-    summary_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as f:
-
-    writer = csv.writer(
-        f
-    )
-
-
-    writer.writerow(
-        [
-            "region",
-            "cells",
-            "mean_lon",
-            "mean_lat",
-            "mean_transitions",
-            "mean_distinct_drifters",
-            "median_distinct_drifters",
-            "one_step_internal_retention",
-            "30d_same_region",
-            "30d_inside_box",
-            "365d_same_region",
-            "365d_inside_box"
-        ]
-    )
-
-
-    for group in range(
-        N_REGIONS
-    ):
-
-        if group not in region_results:
-
-            continue
-
-
-        r = region_results[
-            group
-        ]
-
-
-        writer.writerow(
-            [
-                group + 1,
-                r["cells"],
-                r["mean_lon"],
-                r["mean_lat"],
-                r["mean_transitions"],
-                r["mean_drifters"],
-                r["median_drifters"],
-                r["one_step"],
-                r["stay30"],
-                r["inside30"],
-                r["stay365"],
-                r["inside365"]
-            ]
-        )
-
-
-# ============================================================
-# SAVE CELL LABELS
-# ============================================================
-
-cell_file = (
-    DATA_DIR
-    / "almost_invariant_regions_1deg.csv"
-)
-
-
-with open(
-    cell_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as f:
-
-    writer = csv.writer(
-        f
-    )
-
-
-    writer.writerow(
-        [
-            "lon",
-            "lat",
-            "region",
-            "row_transitions",
-            "distinct_drifters",
-            "flagged",
-            "empty",
-            "reliable"
-        ]
-    )
-
-
-    for k in range(
-        n_cells
-    ):
-
-        if region_label[k] >= 0:
-
-            region_number = (
-                region_label[k]
-                + 1
-            )
-
-        else:
-
-            region_number = ""
-
-
-        writer.writerow(
-            [
-                center_lon[k],
-                center_lat[k],
-                region_number,
-                int(row_obs[k]),
-                int(row_drifters[k]),
-                bool(flagged[k]),
-                bool(empty[k]),
-                bool(reliable[k])
-            ]
-        )
-
-
-# ============================================================
-# MAP GRID
-# ============================================================
-
-grid = np.full(
-    n_lon * n_lat,
-    np.nan
-)
-
-
-valid = (
-    region_label >= 0
-)
-
-
-grid[
-    cells[
-        valid
-    ]
-] = (
-    region_label[
-        valid
-    ]
-    + 1
-)
-
-
-grid = grid.reshape(
-    n_lat,
-    n_lon
-)
-
-
-plot_file = (
-    FIGURE_DIR
-    / "almost_invariant_regions_1deg.png"
-)
-
-
-# ============================================================
-# MAP
-# ============================================================
-
-try:
-
     import cartopy.crs as ccrs
     import cartopy.feature as cfeature
-
-
-    fig = plt.figure(
-        figsize=(10, 7)
-    )
-
-
-    ax = plt.axes(
-        projection=ccrs.PlateCarree()
-    )
-
-
-    cmap = plt.get_cmap(
-        "tab10",
-        N_REGIONS
-    )
-
-
-    mesh = ax.pcolormesh(
-        lon_edges,
-        lat_edges,
-        grid,
-        cmap=cmap,
-        vmin=0.5,
-        vmax=N_REGIONS + 0.5,
-        transform=ccrs.PlateCarree()
-    )
-
-
-    ax.set_extent(
-        [
-            BOX[0],
-            BOX[1],
-            BOX[2],
-            BOX[3]
-        ],
-        crs=ccrs.PlateCarree()
-    )
-
-
-    ax.add_feature(
-        cfeature.LAND
-    )
-
-
-    ax.coastlines(
-        linewidth=0.7
-    )
-
-
-    gl = ax.gridlines(
-        draw_labels=True,
-        linewidth=0.3,
-        alpha=0.5
-    )
-
-
-    gl.top_labels = False
-
-    gl.right_labels = False
-
-
+    subplot_kw = {"projection": ccrs.PlateCarree()}
 except ImportError:
-
-    fig, ax = plt.subplots(
-        figsize=(10, 7)
-    )
-
-
-    cmap = plt.get_cmap(
-        "tab10",
-        N_REGIONS
-    )
-
-
-    mesh = ax.pcolormesh(
-        lon_edges,
-        lat_edges,
-        grid,
-        cmap=cmap,
-        vmin=0.5,
-        vmax=N_REGIONS + 0.5
-    )
-
-
-    ax.set_xlabel(
-        "Longitude"
-    )
-
-
-    ax.set_ylabel(
-        "Latitude"
-    )
-
-
-# ============================================================
-# COLORBAR
-# ============================================================
-
-cbar = fig.colorbar(
-    mesh,
-    ax=ax,
-    ticks=np.arange(
-        1,
-        N_REGIONS + 1
-    )
-)
-
-
-cbar.set_label(
-    "Candidate almost-invariant region"
-)
-
-
-ax.set_title(
-    "Candidate Almost-Invariant Regions — 1° Drogued Matrix"
-)
-
-
-plt.tight_layout()
-
-
-plt.savefig(
-    plot_file,
-    dpi=300,
-    bbox_inches="tight"
-)
-
-
+    ccrs = None
+    subplot_kw = {}
+kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
+fig, axes = plt.subplots(1, 2, figsize=(14, 4.6), subplot_kw=subplot_kw)
+for ax, name in zip(axes, DROGUE_TYPES):
+    op, region, k = maps[name]
+    cmap = ListedColormap(REGION_COLORS[:k])
+    ax.pcolormesh(op["lon_edges"], op["lat_edges"], to_grid(op, region), cmap=cmap,
+                  norm=BoundaryNorm(np.arange(k + 1) - 0.5, k), **kw)
+    lon, lat = cell_centres(op)
+    for g in range(k):
+        m = region == g
+        ax.text(lon[m].mean(), lat[m].mean(), str(g + 1), ha="center", va="center", fontsize=11,
+                fontweight="bold", color="white", zorder=4, **kw)
+    if ccrs:
+        ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
+        ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
+    ax.set_title(f"{name.capitalize()}: {k} regions", fontsize=10)
+fig.suptitle(f"Almost-invariant regions (reliable cells) — {RES:g}°, τ = {TAU:g} d", fontsize=12)
+out_png = f"figures/agulhas_almost_invariant_{TAG}.png"
+plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
-
-
-# ============================================================
-# DONE
-# ============================================================
-
-print(
-    "\nSaved:"
-)
-
-print(
-    summary_file
-)
-
-print(
-    cell_file
-)
-
-print(
-    plot_file
-)
-
-
-print(
-    "\nDONE."
-)
+print(f"\nSaved → {out_summary}\nSaved → {out_cells}\nSaved → {out_png}")

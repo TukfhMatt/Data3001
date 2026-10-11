@@ -1,1064 +1,213 @@
-from pathlib import Path
-import csv
+"""
+Agulhas Region — Retention Hotspots and Their Stability
+Where in R material is held longest. Each reliable cell is scored by the
+probability that material released there is still afloat in R after 365
+days; the top HOTSPOT_SHARE of reliable cells are the retention hotspots.
+Two checks decide whether a hotspot is a feature of the flow or of the data:
+
+  • across grids — hotspot sets of two grids rasterised onto a common
+                   REF_RES grid and compared (Jaccard index and overlap
+                   coefficient) only where both grids have reliable cells,
+                   so cells flagged on one grid cannot count as disagreement
+  • bootstrap    — on the reference grid, whole drifters are resampled
+                   N_BOOT times and the matrix rebuilt each time: a 95%
+                   interval on each cell's retention, and how often each cell
+                   is a hotspot (share of resamples in its top HOTSPOT_SHARE)
+
+Retention after a year also measures distance from the open edges of R, so a
+hotspot is a place R holds material, not necessarily a closed eddy.
+
+Needs the matrices from 03 and the subset from 00 (for the bootstrap).
+
+    .venv/bin/python scripts/13_trap_stability.py --res 0.5 1 2 --tau 3.5
+"""
+
+import os
+from itertools import combinations
+
 import numpy as np
+import pandas as pd
+import matplotlib
+matplotlib.use("Agg")  # non-interactive, headless
+import matplotlib.pyplot as plt
+import xarray as xr
 
-from config import (
-    BOX,
-    RESOLUTIONS,
-    TAU_DAYS,
-    operator_path
-)
+from config import DROGUE_TYPES, RES, grid_shape, operator_path, parse_args, setting_tag
+from transport import (cell_centres, drifter_counts, load_operator, move_indices, reliable,
+                       resampled_counts, row_normalise, strand_times, to_grid, transition_states)
 
+args = parse_args(__doc__, grid=True, lag=True, multi=True)
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
+TAG = setting_tag(args.res, args.tau, args.box)
+HOTSPOT_SHARE = 0.10
+RETENTION_DAYS = 365
+REF_RES = 0.25                 # common grid for comparing hotspot sets
+BOOT_RES = RES if RES in args.res else args.res[0]
+N_BOOT = 1000
+SEED = 0
 
-# ============================================================
-# SQ2 RETENTION / TRAP STABILITY
-#
-# We use long-term in-box retention as the trap score.
-#
-# For each starting ocean cell:
-#   score = probability still inside R after 365 days
-#
-# Then:
-#   - ignore empty rows
-#   - only use reliable cells (not flagged)
-#   - top 10% = retention hotspot
-#   - compare hotspot locations across 0.5, 1 and 2 degree grids
-# ============================================================
-
-
-PROJECT_DIR = Path(__file__).resolve().parent.parent
-
-DATA_DIR = PROJECT_DIR / "data"
-
-DATA_DIR.mkdir(
-    exist_ok=True
-)
+os.makedirs("figures", exist_ok=True)
+rng = np.random.default_rng(SEED)
 
 
-HOTSPOT_PERCENT = 10
-
-CHECK_DAYS = [
-    30,
-    365
-]
-
-REFERENCE_RES = 0.25
-
-
-print(
-    "========================================"
-)
-
-print(
-    "SQ2 RETENTION / TRAP STABILITY"
-)
-
-print(
-    "========================================"
-)
-
-print(
-    "\nRegion:",
-    BOX
-)
-
-print(
-    "Lag:",
-    TAU_DAYS,
-    "days"
-)
-
-print(
-    "Hotspot definition: top",
-    HOTSPOT_PERCENT,
-    "% of reliable cells by 365-day retention"
-)
+def retention(P, n_cells, steps):
+    """Probability that material starting in each ocean state is still in R after `steps`."""
+    Q = P[:n_cells, :n_cells]
+    s = np.ones(n_cells)
+    for _ in range(steps):
+        s = Q @ s
+    return s
 
 
-# ============================================================
-# SCIPY
-# ============================================================
+def hotspots(score, ok):
+    """Top HOTSPOT_SHARE of the cells in ok by score."""
+    return ok & (score >= np.quantile(score[ok], 1 - HOTSPOT_SHARE))
+
+
+# ── 1. Retention and hotspots per grid ───────────────────────────────────────
+summary, cells_out, raster = [], [], {}
+ref_lon = np.arange(LON_MIN + REF_RES / 2, LON_MAX, REF_RES)
+ref_lat = np.arange(LAT_MIN + REF_RES / 2, LAT_MAX, REF_RES)
+pt_lon, pt_lat = [a.ravel() for a in np.meshgrid(ref_lon, ref_lat)]
+for tau in args.tau:
+    steps = int(round(RETENTION_DAYS / tau))
+    for res in args.res:
+        for name in DROGUE_TYPES:
+            op = load_operator(operator_path(name, res, tau, args.box))
+            n = len(op["cell_flat"])
+            ok = reliable(op)
+            score = retention(op["P"], n, steps)
+            hot = hotspots(score, ok)
+            lon, lat = cell_centres(op)
+            summary.append({"res": res, "tau": tau, "drogue": name, "reliable_cells": int(ok.sum()),
+                            "median_retention": np.median(score[ok]),
+                            "hotspot_threshold": score[hot].min(), "hotspot_cells": int(hot.sum()),
+                            "hotspot_lon": np.mean(lon[hot]), "hotspot_lat": np.mean(lat[hot])})
+            cells_out.append(pd.DataFrame({"res": res, "tau": tau, "drogue": name, "lon": lon, "lat": lat,
+                                           "retention_365d": score, "reliable": ok, "hotspot": hot}))
+            # Each REF_RES point takes the state of the cell it falls in
+            n_lon, n_lat = grid_shape(args.box, res)
+            flat = ((pt_lat - LAT_MIN) // res).astype(int) * n_lon + ((pt_lon - LON_MIN) // res).astype(int)
+            state = np.full(n_lon * n_lat, -1)
+            state[op["cell_flat"]] = np.arange(n)
+            st = state[flat]
+            raster[(tau, res, name)] = (np.where(st >= 0, ok[st], False), np.where(st >= 0, hot[st], False))
+
+summary = pd.DataFrame(summary)
+print(f"Retention after {RETENTION_DAYS} days; hotspots = top {HOTSPOT_SHARE:.0%} of reliable cells")
+print(f"{'grid':>5} {'τ':>4} {'type':<10}{'reliable':>9}{'median':>8}{'threshold':>10}{'hotspot centre':>18}")
+for r in summary.itertuples():
+    print(f"{r.res:>4g}° {r.tau:>4g} {r.drogue:<10}{r.reliable_cells:>9}{r.median_retention:>8.1%}"
+          f"{r.hotspot_threshold:>10.1%}{r.hotspot_lon:>9.1f}°E {-r.hotspot_lat:.1f}°S")
+
+# ── 2. Hotspot agreement across grids ────────────────────────────────────────
+pairs = []
+for tau in args.tau:
+    for name in DROGUE_TYPES:
+        for a, b in combinations(args.res, 2):
+            ok_a, hot_a = raster[(tau, a, name)]
+            ok_b, hot_b = raster[(tau, b, name)]
+            both = ok_a & ok_b
+            ha, hb = hot_a & both, hot_b & both
+            inter, union = (ha & hb).sum(), (ha | hb).sum()
+            pairs.append({"tau": tau, "drogue": name, "grid_a": a, "grid_b": b,
+                          "common_area_share": both.mean(),
+                          "jaccard": inter / union if union else np.nan,
+                          "overlap": inter / min(ha.sum(), hb.sum()) if min(ha.sum(), hb.sum()) else np.nan})
+pairs = pd.DataFrame(pairs)
+print(f"\nHotspot agreement where both grids are reliable (rasterised at {REF_RES:g}°)")
+for r in pairs.itertuples():
+    print(f"  τ = {r.tau:g} d {r.drogue:<10} {r.grid_a:g}° vs {r.grid_b:g}°: Jaccard {r.jaccard:.0%}, "
+          f"overlap {r.overlap:.0%} (over {r.common_area_share:.0%} of R)")
+
+# ── 3. Drifter bootstrap on the reference grid ───────────────────────────────
+ds = xr.open_dataset(args.data)
+lon = ds["lon"].values.astype(float)
+lat = ds["lat"].values.astype(float)
+drogue = ds["drogue_status"].values.astype(bool)
+t = ds["time"].values.astype("datetime64[s]").astype(np.int64)
+traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
+in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
+n_lon, _ = grid_shape(args.box, BOOT_RES)
+cell_flat = np.where(in_R, ((lat - LAT_MIN) // BOOT_RES).astype(int) * n_lon
+                     + ((lon - LON_MIN) // BOOT_RES).astype(int), -1)
+strand_t = strand_times(ds, traj_idx, t, in_R)
+
+boot_rows, maps = [], {}
+for tau in args.tau:
+    steps = int(round(RETENTION_DAYS / tau))
+    start, end, stranded = move_indices(traj_idx, t, in_R, tau, strand_t)
+    for name, flag in DROGUE_TYPES.items():
+        op = load_operator(operator_path(name, BOOT_RES, tau, args.box))
+        cells, n = op["cell_flat"], len(op["cell_flat"])
+        n_states = op["P"].shape[0]
+        same = (drogue[start] == flag) & (drogue[end] == flag)
+        s, e = start[same], end[same]
+        f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box, stranded[same])
+        counts = drifter_counts(traj_idx[s], f, to, n_states)
+        C = np.bincount(counts[1], weights=counts[2], minlength=n_states**2).reshape(n_states, n_states)
+        assert np.array_equal(C, op["C"]), f"rebuilt counts differ from the saved {name} matrix"
+
+        ok = reliable(op)
+        score = retention(op["P"], n, steps)
+        hot = hotspots(score, ok)
+        samples = np.empty((N_BOOT, n))
+        in_top = np.zeros(n)
+        for b in range(N_BOOT):
+            Pb, _ = row_normalise(resampled_counts(counts, n_states, rng), cells, n_lon)
+            samples[b] = retention(Pb, n, steps)
+            in_top += hotspots(samples[b], ok)
+        lo, hi = np.percentile(samples, [2.5, 97.5], axis=0)
+        freq = in_top / N_BOOT
+        clon, clat = cell_centres(op)
+        boot_rows.append(pd.DataFrame({"tau": tau, "drogue": name, "lon": clon, "lat": clat,
+                                       "reliable": ok, "drifters": op["row_drifters"], "hotspot": hot,
+                                       "retention_365d": score, "ci_low": lo, "ci_high": hi,
+                                       "hotspot_frequency": freq}))
+        maps[(tau, name)] = (op, np.where(ok, freq, np.nan))
+
+        print(f"\n{name}, {BOOT_RES:g}°, τ = {tau:g} d: {counts[3]:,} drifters resampled {N_BOOT} times")
+        print(f"  hotspot cells a hotspot in ≥ 50% of resamples: {(freq[hot] >= 0.5).sum()} of {hot.sum()}; "
+              f"other cells a hotspot in ≥ 50%: {(freq[ok & ~hot] >= 0.5).sum()}")
+        print(f"  {'cell':>15}{'drifters':>10}{'retention (95%)':>22}{'hotspot freq':>14}")
+        for k in np.argsort(-score * ok)[:8]:
+            print(f"  {clon[k]:>6.1f}°E {-clat[k]:>4.1f}°S{op['row_drifters'][k]:>10}"
+                  f"{score[k]:>9.0%} ({lo[k]:.0%}–{hi[k]:.0%}){freq[k]:>14.0%}")
+
+# ── 4. Save and map hotspot frequency ────────────────────────────────────────
+out_summary = f"data/retention_hotspots_{TAG}.csv"
+out_pairs = f"data/retention_hotspot_agreement_{TAG}.csv"
+out_cells = f"data/retention_cells_{TAG}.csv"
+out_boot = f"data/retention_bootstrap_{TAG}.csv"
+summary.to_csv(out_summary, index=False)
+pairs.to_csv(out_pairs, index=False)
+pd.concat(cells_out).to_csv(out_cells, index=False)
+pd.concat(boot_rows).to_csv(out_boot, index=False)
 
 try:
-
-    from scipy.sparse import csr_matrix
-
+    import cartopy.crs as ccrs
+    import cartopy.feature as cfeature
+    subplot_kw = {"projection": ccrs.PlateCarree()}
 except ImportError:
-
-    print(
-        "\nERROR: scipy is needed."
-    )
-
-    print(
-        "Run:"
-    )
-
-    print(
-        "pip install scipy"
-    )
-
-    raise SystemExit
-
-
-# ============================================================
-# STORAGE
-# ============================================================
-
-results = {}
-
-hotspot_info = {}
-
-
-# ============================================================
-# LOOP THROUGH MATRICES
-# ============================================================
-
-for res in RESOLUTIONS:
-
-    print(
-        "\n\n========================================"
-    )
-
-    print(
-        f"GRID SIZE: {res}°"
-    )
-
-    print(
-        "========================================"
-    )
-
-
-    matrix_name = operator_path(
-        "drogued",
-        res,
-        TAU_DAYS,
-        BOX
-    )
-
-
-    matrix_file = (
-        PROJECT_DIR
-        / matrix_name
-    )
-
-
-    print(
-        "\nLoading:"
-    )
-
-    print(
-        matrix_file
-    )
-
-
-    if not matrix_file.exists():
-
-        print(
-            "\nERROR: matrix file not found."
-        )
-
-        raise SystemExit
-
-
-    data = np.load(
-        matrix_file,
-        allow_pickle=True
-    )
-
-
-    needed = [
-        "P",
-        "row_obs",
-        "row_drifters",
-        "flagged",
-        "empty",
-        "cell_flat",
-        "lon_edges",
-        "lat_edges"
-    ]
-
-
-    for name in needed:
-
-        if name not in data.files:
-
-            print(
-                f"\nERROR: {name} missing."
-            )
-
-            raise SystemExit
-
-
-    # --------------------------------------------------------
-    # LOAD DATA
-    # --------------------------------------------------------
-
-    P = data[
-        "P"
-    ]
-
-    row_obs = data[
-        "row_obs"
-    ]
-
-    row_drifters = data[
-        "row_drifters"
-    ]
-
-    flagged = data[
-        "flagged"
-    ].astype(bool)
-
-    empty = data[
-        "empty"
-    ].astype(bool)
-
-    cells = data[
-        "cell_flat"
-    ].astype(int)
-
-    lon_edges = data[
-        "lon_edges"
-    ]
-
-    lat_edges = data[
-        "lat_edges"
-    ]
-
-
-    n_cells = len(
-        cells
-    )
-
-
-    # --------------------------------------------------------
-    # OCEAN-ONLY TRANSITION MATRIX
-    # --------------------------------------------------------
-
-    Q = P[
-        :n_cells,
-        :n_cells
-    ].copy()
-
-
-    # Empty rows are self-loops in the normal model.
-    # That is useful for propagation, but bad for trap detection:
-    # an empty cell would look like 100% retention forever.
-    #
-    # Here we treat entering an empty state as unsupported,
-    # rather than as a real physical trap.
-
-    Q[
-        empty,
-        :
-    ] = 0
-
-
-    Q_sparse = csr_matrix(
-        Q
-    )
-
-
-    del Q
-
-
-    # --------------------------------------------------------
-    # RETENTION PROBABILITY
-    # --------------------------------------------------------
-    #
-    # survive[i] =
-    # probability that material starting from cell i
-    # is still in supported ocean states after k steps.
-    #
-    # s(k+1) = Q @ s(k)
-    # s(0) = 1
-    # --------------------------------------------------------
-
-    steps_needed = {}
-
-
-    for days in CHECK_DAYS:
-
-        steps = int(
-            round(
-                days
-                / TAU_DAYS
-            )
-        )
-
-        steps_needed[
-            steps
-        ] = days
-
-
-    max_steps = max(
-        steps_needed.keys()
-    )
-
-
-    survive = np.ones(
-        n_cells
-    )
-
-
-    retention = {}
-
-
-    print(
-        "\nPropagating retention..."
-    )
-
-
-    for step in range(
-        1,
-        max_steps + 1
-    ):
-
-        survive = (
-            Q_sparse
-            @ survive
-        )
-
-
-        if step in steps_needed:
-
-            days = steps_needed[
-                step
-            ]
-
-            retention[
-                days
-            ] = survive.copy()
-
-
-            print(
-                f"{days}-day retention calculated "
-                f"({step} steps)"
-            )
-
-
-    # --------------------------------------------------------
-    # RELIABLE CELLS
-    # --------------------------------------------------------
-
-    active = (
-        row_obs > 0
-    )
-
-
-    reliable = (
-        active
-        & ~flagged
-        & ~empty
-    )
-
-
-    n_reliable = int(
-        np.count_nonzero(
-            reliable
-        )
-    )
-
-
-    retention_30 = retention[
-        30
-    ]
-
-    retention_365 = retention[
-        365
-    ]
-
-
-    reliable_30 = retention_30[
-        reliable
-    ]
-
-    reliable_365 = retention_365[
-        reliable
-    ]
-
-
-    # --------------------------------------------------------
-    # HOTSPOT THRESHOLD
-    # --------------------------------------------------------
-
-    percentile_cut = (
-        100
-        - HOTSPOT_PERCENT
-    )
-
-
-    threshold = np.percentile(
-        reliable_365,
-        percentile_cut
-    )
-
-
-    hotspot = (
-        reliable
-        & (
-            retention_365
-            >= threshold
-        )
-    )
-
-
-    n_hotspot = int(
-        np.count_nonzero(
-            hotspot
-        )
-    )
-
-
-    # --------------------------------------------------------
-    # CELL CENTRES
-    # --------------------------------------------------------
-
-    n_lon = (
-        len(lon_edges)
-        - 1
-    )
-
-
-    center_lon = np.zeros(
-        n_cells
-    )
-
-    center_lat = np.zeros(
-        n_cells
-    )
-
-
-    for k, flat_cell in enumerate(
-        cells
-    ):
-
-        i = (
-            flat_cell
-            % n_lon
-        )
-
-        j = (
-            flat_cell
-            // n_lon
-        )
-
-
-        center_lon[k] = (
-            lon_edges[i]
-            + lon_edges[i + 1]
-        ) / 2
-
-
-        center_lat[k] = (
-            lat_edges[j]
-            + lat_edges[j + 1]
-        ) / 2
-
-
-    # --------------------------------------------------------
-    # SUMMARY
-    # --------------------------------------------------------
-
-    median_30 = np.median(
-        reliable_30
-    )
-
-
-    median_365 = np.median(
-        reliable_365
-    )
-
-
-    q75_365 = np.percentile(
-        reliable_365,
-        75
-    )
-
-
-    max_365 = np.max(
-        reliable_365
-    )
-
-
-    print(
-        f"\nReliable active cells: "
-        f"{n_reliable:,}"
-    )
-
-
-    print(
-        "\n--- Retention ---"
-    )
-
-
-    print(
-        f"Median 30-day retention: "
-        f"{median_30:.1%}"
-    )
-
-
-    print(
-        f"Median 365-day retention: "
-        f"{median_365:.1%}"
-    )
-
-
-    print(
-        f"75th percentile 365-day retention: "
-        f"{q75_365:.1%}"
-    )
-
-
-    print(
-        f"Maximum 365-day retention: "
-        f"{max_365:.1%}"
-    )
-
-
-    print(
-        "\n--- Hotspots ---"
-    )
-
-
-    print(
-        f"Top-{HOTSPOT_PERCENT}% threshold: "
-        f"{threshold:.1%}"
-    )
-
-
-    print(
-        f"Hotspot cells: "
-        f"{n_hotspot:,}"
-    )
-
-
-    # --------------------------------------------------------
-    # TOP 10 CELLS
-    # --------------------------------------------------------
-
-    reliable_indices = np.where(
-        reliable
-    )[0]
-
-
-    order = reliable_indices[
-        np.argsort(
-            retention_365[
-                reliable_indices
-            ]
-        )[
-            ::-1
-        ]
-    ]
-
-
-    top_n = min(
-        10,
-        len(order)
-    )
-
-
-    print(
-        "\nTop retention cells:"
-    )
-
-
-    for rank in range(
-        top_n
-    ):
-
-        idx = order[
-            rank
-        ]
-
-
-        print(
-            f"{rank + 1:>2}. "
-            f"{center_lon[idx]:>6.2f}°E, "
-            f"{abs(center_lat[idx]):>5.2f}°S | "
-            f"30 d {retention_30[idx]:>6.1%} | "
-            f"365 d {retention_365[idx]:>6.1%} | "
-            f"drifters {int(row_drifters[idx])}"
-        )
-
-
-    # --------------------------------------------------------
-    # STORE
-    # --------------------------------------------------------
-
-    results[
-        res
-    ] = {
-
-        "reliable": n_reliable,
-
-        "median30": median_30,
-
-        "median365": median_365,
-
-        "q75_365": q75_365,
-
-        "max365": max_365,
-
-        "threshold": threshold,
-
-        "hotspots": n_hotspot
-    }
-
-
-    hotspot_info[
-        res
-    ] = {
-
-        "hotspot": hotspot,
-
-        "cells": cells,
-
-        "lon_edges": lon_edges,
-
-        "lat_edges": lat_edges,
-
-        "n_lon": n_lon
-    }
-
-
-# ============================================================
-# COMMON REFERENCE GRID
-#
-# Rasterise all three hotspot sets onto the same fine grid
-# so that different resolutions can be compared spatially.
-# ============================================================
-
-print(
-    "\n\n========================================"
-)
-
-print(
-    "HOTSPOT STABILITY ACROSS GRIDS"
-)
-
-print(
-    "========================================"
-)
-
-
-lon_min, lon_max, lat_min, lat_max = BOX
-
-
-ref_lon = np.arange(
-    lon_min + REFERENCE_RES / 2,
-    lon_max,
-    REFERENCE_RES
-)
-
-
-ref_lat = np.arange(
-    lat_min + REFERENCE_RES / 2,
-    lat_max,
-    REFERENCE_RES
-)
-
-
-xx, yy = np.meshgrid(
-    ref_lon,
-    ref_lat
-)
-
-
-points_lon = xx.ravel()
-
-points_lat = yy.ravel()
-
-
-reference = {}
-
-
-for res in RESOLUTIONS:
-
-    info = hotspot_info[
-        res
-    ]
-
-
-    lon_edges = info[
-        "lon_edges"
-    ]
-
-    lat_edges = info[
-        "lat_edges"
-    ]
-
-    cells = info[
-        "cells"
-    ]
-
-    hotspot = info[
-        "hotspot"
-    ]
-
-
-    n_lon = (
-        len(lon_edges)
-        - 1
-    )
-
-    n_lat = (
-        len(lat_edges)
-        - 1
-    )
-
-
-    # state lookup:
-    # flattened grid cell -> ocean state number
-
-    lookup = np.full(
-        n_lon * n_lat,
-        -1,
-        dtype=int
-    )
-
-
-    lookup[
-        cells
-    ] = np.arange(
-        len(cells)
-    )
-
-
-    i = np.floor(
-        (
-            points_lon
-            - lon_edges[0]
-        )
-        / res
-    ).astype(int)
-
-
-    j = np.floor(
-        (
-            points_lat
-            - lat_edges[0]
-        )
-        / res
-    ).astype(int)
-
-
-    inside = (
-        (i >= 0)
-        & (i < n_lon)
-        & (j >= 0)
-        & (j < n_lat)
-    )
-
-
-    flat = (
-        j * n_lon
-        + i
-    )
-
-
-    ocean = np.zeros(
-        len(points_lon),
-        dtype=bool
-    )
-
-
-    hot = np.zeros(
-        len(points_lon),
-        dtype=bool
-    )
-
-
-    valid_points = np.where(
-        inside
-    )[0]
-
-
-    states = lookup[
-        flat[
-            valid_points
-        ]
-    ]
-
-
-    is_ocean = (
-        states >= 0
-    )
-
-
-    ocean_points = valid_points[
-        is_ocean
-    ]
-
-
-    ocean[
-        ocean_points
-    ] = True
-
-
-    ocean_states = states[
-        is_ocean
-    ]
-
-
-    hot[
-        ocean_points
-    ] = hotspot[
-        ocean_states
-    ]
-
-
-    reference[
-        res
-    ] = {
-
-        "ocean": ocean,
-
-        "hot": hot
-    }
-
-
-# ============================================================
-# PAIRWISE COMPARISON
-# ============================================================
-
-pairs = [
-    (0.5, 1.0),
-    (1.0, 2.0),
-    (0.5, 2.0)
-]
-
-
-stability_rows = []
-
-
-print(
-    "\nGrid pair | Jaccard | Overlap coefficient"
-)
-
-
-for a, b in pairs:
-
-    ocean_a = reference[
-        a
-    ][
-        "ocean"
-    ]
-
-    ocean_b = reference[
-        b
-    ][
-        "ocean"
-    ]
-
-
-    hot_a = reference[
-        a
-    ][
-        "hot"
-    ]
-
-    hot_b = reference[
-        b
-    ][
-        "hot"
-    ]
-
-
-    common_ocean = (
-        ocean_a
-        & ocean_b
-    )
-
-
-    a_common = (
-        hot_a
-        & common_ocean
-    )
-
-
-    b_common = (
-        hot_b
-        & common_ocean
-    )
-
-
-    intersection = np.count_nonzero(
-        a_common
-        & b_common
-    )
-
-
-    union = np.count_nonzero(
-        a_common
-        | b_common
-    )
-
-
-    size_a = np.count_nonzero(
-        a_common
-    )
-
-    size_b = np.count_nonzero(
-        b_common
-    )
-
-
-    if union > 0:
-
-        jaccard = (
-            intersection
-            / union
-        )
-
-    else:
-
-        jaccard = 0
-
-
-    smaller = min(
-        size_a,
-        size_b
-    )
-
-
-    if smaller > 0:
-
-        overlap = (
-            intersection
-            / smaller
-        )
-
-    else:
-
-        overlap = 0
-
-
-    print(
-        f"{a:g}° vs {b:g}° | "
-        f"{jaccard:>7.1%} | "
-        f"{overlap:>18.1%}"
-    )
-
-
-    stability_rows.append(
-        [
-            a,
-            b,
-            intersection,
-            union,
-            jaccard,
-            overlap
-        ]
-    )
-
-
-# ============================================================
-# SAVE SUMMARY CSV
-# ============================================================
-
-summary_file = (
-    DATA_DIR
-    / "retention_hotspot_summary.csv"
-)
-
-
-with open(
-    summary_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as f:
-
-    writer = csv.writer(
-        f
-    )
-
-
-    writer.writerow(
-        [
-            "grid_deg",
-            "reliable_cells",
-            "median_30d_retention",
-            "median_365d_retention",
-            "q75_365d_retention",
-            "max_365d_retention",
-            "hotspot_threshold",
-            "hotspot_cells"
-        ]
-    )
-
-
-    for res in RESOLUTIONS:
-
-        r = results[
-            res
-        ]
-
-
-        writer.writerow(
-            [
-                res,
-                r["reliable"],
-                r["median30"],
-                r["median365"],
-                r["q75_365"],
-                r["max365"],
-                r["threshold"],
-                r["hotspots"]
-            ]
-        )
-
-
-stability_file = (
-    DATA_DIR
-    / "retention_hotspot_stability.csv"
-)
-
-
-with open(
-    stability_file,
-    "w",
-    newline="",
-    encoding="utf-8"
-) as f:
-
-    writer = csv.writer(
-        f
-    )
-
-
-    writer.writerow(
-        [
-            "grid_a",
-            "grid_b",
-            "intersection_points",
-            "union_points",
-            "jaccard",
-            "overlap_coefficient"
-        ]
-    )
-
-
-    writer.writerows(
-        stability_rows
-    )
-
-
-print(
-    "\nSaved:"
-)
-
-print(
-    summary_file
-)
-
-print(
-    stability_file
-)
-
-
-print(
-    "\nDONE."
-)
+    ccrs = None
+    subplot_kw = {}
+kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
+tau0 = args.tau[0]
+fig, axes = plt.subplots(1, 2, figsize=(14, 4.6), subplot_kw=subplot_kw)
+for ax, name in zip(axes, DROGUE_TYPES):
+    op, freq = maps[(tau0, name)]
+    mesh = ax.pcolormesh(op["lon_edges"], op["lat_edges"], to_grid(op, freq),
+                         cmap="magma_r", vmin=0, vmax=1, **kw)
+    if ccrs:
+        ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
+        ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
+        ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
+    ax.set_title(f"{name.capitalize()}: share of resamples in the top {HOTSPOT_SHARE:.0%}", fontsize=10)
+cb = fig.colorbar(mesh, ax=axes, shrink=0.8)
+cb.set_label("Hotspot frequency (reliable cells)")
+fig.suptitle(f"Retention hotspots after {RETENTION_DAYS} days — {BOOT_RES:g}°, τ = {tau0:g} d, "
+             f"{N_BOOT} drifter resamples", fontsize=12)
+out_png = f"figures/agulhas_retention_hotspots_{TAG}.png"
+plt.savefig(out_png, dpi=150, bbox_inches="tight")
+plt.close()
+print(f"\nSaved → {out_summary}\nSaved → {out_pairs}\nSaved → {out_cells}\nSaved → {out_boot}\nSaved → {out_png}")
