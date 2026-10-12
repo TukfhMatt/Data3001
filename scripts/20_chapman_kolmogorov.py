@@ -20,6 +20,9 @@ main summary statistics.
 The script also reports differences in:
   - probability of remaining inside R
   - each absorbing fate (W/E/S/N/stranded)
+  - share of reliable rows with TVD below 0.25 and 0.50
+
+The TVD thresholds are descriptive summaries, not pass/fail criteria.
 
 The direct 2*tau matrices must already exist. For the baseline setting:
 
@@ -349,6 +352,20 @@ for name in DROGUE_TYPES:
         common
     ]
 
+    # Descriptive shares of reliable rows below convenient TVD thresholds.
+    # These are not formal pass/fail thresholds.
+    share_below_025 = float(
+        np.mean(
+            values < 0.25
+        )
+    )
+
+    share_below_050 = float(
+        np.mean(
+            values < 0.50
+        )
+    )
+
     print(
         "\n----------------------------------------"
     )
@@ -405,6 +422,16 @@ for name in DROGUE_TYPES:
     print(
         f"Max TVD                  : "
         f"{np.max(values):.3f}"
+    )
+
+    print(
+        f"Rows with TVD < 0.25     : "
+        f"{share_below_025:.1%}"
+    )
+
+    print(
+        f"Rows with TVD < 0.50     : "
+        f"{share_below_050:.1%}"
     )
 
     print(
@@ -496,6 +523,12 @@ for name in DROGUE_TYPES:
                     values
                 )
             ),
+
+        "share_tvd_below_0p25":
+            share_below_025,
+
+        "share_tvd_below_0p50":
+            share_below_050,
 
         "median_absdiff_in_R":
             float(
@@ -928,6 +961,11 @@ print(
 print(
     "Larger TVD means the directly observed 2*tau transition "
     "distribution differs more from two applications of P(tau)."
+)
+
+print(
+    "The TVD < 0.25 and TVD < 0.50 shares are descriptive summaries, "
+    "not formal pass/fail thresholds."
 )
 
 print(
