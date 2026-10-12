@@ -77,21 +77,23 @@ python scripts/18_sensitivity.py           # τ and grid sensitivity (needs 03 a
 python scripts/19_seasonal_matrices.py     # DJF/MAM/JJA/SON seasonal operators and TVD comparison
 python scripts/03_transition_matrix.py --res 1 --tau 7  # direct 2τ matrix needed by 20
 python scripts/20_chapman_kolmogorov.py    # P(tau)^2 vs direct P(2*tau) Markov-consistency check
+python scripts/21_coastal_pooling.py       # pool thin coastal cells into short coastal segments
 ```
 
-Scripts `01`–`04`, `11`–`17` and `19`–`20` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1°, 2°; τ = 3.5 days):
+Scripts `01`–`04`, `11`–`17` and `19`–`21` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
 
 ```bash
 python scripts/02_grid_coverage.py --res 0.5 1 2
-python scripts/03_transition_matrix.py --box 10 55 -41 -15 --res 1 --tau 2 3.5 5   # several grids / lags in one run
+python scripts/03_transition_matrix.py --box 10 55 -41 -15 --res 1 --tau 2 3.5 5   # example: custom box and several lags
 python scripts/04_shipping_overlay.py --res 1 --tau 3.5                           # needs that matrix from 03
 python scripts/19_seasonal_matrices.py --res 1 --tau 3.5
 python scripts/19_seasonal_matrices.py --res 2 --tau 3.5                         # coarser seasonal robustness check
 python scripts/03_transition_matrix.py --res 1 --tau 7                           # direct 2τ matrix needed by 20
-python scripts/20_chapman_kolmogorov.py --res 1 --tau 3.5                        # P(tau)^2 vs direct P(2*tau) Markov-consistency check
+python scripts/20_chapman_kolmogorov.py --res 1 --tau 3.5                        # P(τ)^2 vs direct P(2τ)
+python scripts/21_coastal_pooling.py --res 1 --tau 3.5                           # needs the annual matrices from 03
 ```
 
-Outputs of `11`–`17` and `19`–`20` carry the grids and lags they were run on in their names (`{tag}`, e.g. `0p5-1-2deg_3p5d_10E-55E_45S-15S`), so runs at other settings do not overwrite each other.
+Outputs of `11`–`17` and `19`–`21` carry the grids and lags they were run on in their names (`{tag}`, e.g. `0p5-1-2deg_3p5d_10E-55E_45S-15S`), so runs at other settings do not overwrite each other.
 
 τ must be a whole number of hours. If a box side is not a multiple of the grid size (e.g. 45° at 2°), the last row or column is a partial cell cut off at the box edge.
 
@@ -120,6 +122,7 @@ Outputs of `11`–`17` and `19`–`20` carry the grids and lags they were run on
 | `18_sensitivity.py` | Compares the reference (1°, τ = 3.5 d) with τ = 2 and 5 days and with 0.5° and 2° grids: held-out skill from `10` at common horizons, and the release points' one-year fates against the reference's bootstrap interval from `06` | `data/sensitivity_skill_{box}.csv`, `data/sensitivity_fates_{box}.csv`, `figures/agulhas_sensitivity_{box}.png` |
 | `19_seasonal_matrices.py` | Builds separate DJF, MAM, JJA and SON transition matrices for both drogue types, assigning each move to the season of its start observation. Reports seasonal row support, TVD against the annual operator, pairwise seasonal TVD on common reliable cells, and 30-day release-point sensitivity. The 2° run is used as a robustness check where 1° drogued seasonal support is sparse. | `data/P_{drogued,undrogued}_{DJF,MAM,JJA,SON}_…npz`, `data/seasonal_support_…csv`, `data/seasonal_tvd_cells_…csv`, `data/seasonal_pairwise_tvd_…csv`, `data/seasonal_release_30d_…csv`, `figures/agulhas_seasonal_summary_…png` |
 | `20_chapman_kolmogorov.py` | Chapman–Kolmogorov consistency check: compares two applications of the τ operator, `P(τ)^2`, with an operator estimated directly from drifter pairs at `2τ`. Reports row-wise TVD over cells reliable at both lags, descriptive shares below TVD 0.25 and 0.50, and differences in in-region and absorbing-state probabilities. For the baseline τ = 3.5 d, the direct 7-day matrices from `03` are required. | `data/chapman_kolmogorov_summary_{tag}.csv`, `data/chapman_kolmogorov_cells_{tag}.csv`, `figures/agulhas_chapman_kolmogorov_{tag}.png` |
+| `21_coastal_pooling.py` | Pools neighbouring thin coastal cells into short contiguous coastal segments without modifying the main transition matrix. Segments are capped at four cells and are merged using distinct-drifter support; segments that remain below the reliability threshold are retained and flagged. The shared segmentation is designed for coastal summaries and later traffic-weighted coastal-risk analysis. | `data/coastal_pooling_cells_{tag}.csv`, `data/coastal_pooling_segments_{tag}.csv`, `data/coastal_pooling_summary_{tag}.csv`, `data/coastal_segments_{tag}.npz`, `figures/agulhas_coastal_pooling_{tag}.png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
 
@@ -136,7 +139,7 @@ curl -L -o data/shipping/shipdensity_commercial.zip \
 ---
 ## Whole-box results
 
-At 1°, τ = 3.5 days, over reliable cells (≥ 10 drifters), drogued / undrogued unless stated. Scripts `11`–`17` and `19`–`20`; seasonal robustness also uses 2°.
+At 1°, τ = 3.5 days, over reliable cells (≥ 10 drifters), drogued / undrogued unless stated. Scripts `11`–`17` and `19`–`21`; seasonal robustness also uses 2°.
 
 - **Data support.** 78% of active drogued rows and 93% of undrogued rows are reliable at 1° (52% / 90% at 0.5°, 89% / 94% at 2°). Coastal cells are much thinner: 33% / 47% reliable at 1°, against 82% / 98% offshore, so coastal and stranding results carry wide intervals.
 - **Retention hotspots.** Drogued material is held longest at 41–44°E, 30–33°S, south-west of Madagascar: about 67–69% is still in R after a year (95% intervals about 52–75%), and 71 of the 75 hotspot cells stay in the top 10% in at least half of 1,000 drifter resamples. Undrogued material is held longest further east, at 48–51°E, 30–33°S (55–56%, intervals 49–60%). Where both grids are reliable, the 1° and 2° hotspots agree (Jaccard 66% drogued, 73% undrogued); 0.5° agrees less for drogued (30–36%), whose rows are thin. Retention after a year also reflects distance from the open edges of R, so a hotspot is a place R holds material, not necessarily a closed eddy.
@@ -146,7 +149,7 @@ At 1°, τ = 3.5 days, over reliable cells (≥ 10 drifters), drogued / undrogue
 - **Release points.** After a year, 19% (14–26%) of drogued material from Durban is still in R, 51% has left east and 22% west, the expected behaviour. Undrogued material from the Mozambique Channel lane (40.5°E, 16.5°S) and the lanes south of Madagascar strands far more: 24–66% after a year, against 0–2% drogued.
 - **Seasonality.** Four seasonal operators (DJF, MAM, JJA and SON) show detectable changes in transport. At 1°, undrogued seasonal support remains good (70–75% of ocean rows reliable), with 551 of 970 cells reliable in all four seasons; pairwise median TVD on those common cells is 0.35–0.38. Drogued seasonal coverage is much thinner at 1° (12–24% reliable; only 26 cells reliable in all four seasons), so those differences are treated cautiously. At 2°, drogued support improves to 41–51% per season and 71 of 263 cells are reliable in all four seasons, while broad seasonal differences remain (pairwise median TVD 0.20–0.24). Undrogued support at 2° is 84–88%, with pairwise median TVD 0.15–0.16. The seasonal results are descriptive sensitivity results rather than a formal significance test.
 - **Markov consistency.** A Chapman–Kolmogorov check compares `P(3.5 d)^2` with transitions estimated directly at 7 days. Over cells reliable at both lags, median row-wise TVD is 0.243 for drogued and 0.173 for undrogued drifters (731 / 892 common reliable cells); the 90th percentiles are 0.377 / 0.261. TVD is below 0.25 for 53.2% / 87.1% of those rows and below 0.50 for 98.8% / 99.8%. Agreement is therefore stronger for undrogued drifters and moderate for drogued drifters. The check supports the 3.5-day operator as an approximate Markov representation rather than establishing exact Markov behaviour; the TVD thresholds are descriptive, not pass/fail criteria.
-
+- **Coastal pooling.** At 1°, τ = 3.5 days, the 103 coastal cells are grouped into 45 contiguous coastal segments, with at most four neighbouring cells per segment. Before pooling, 33.3% of active drogued coastal rows and 46.9% of active undrogued coastal rows were reliable (≥ 10 distinct drifters). After pooling, 58.3% / 69.9% of coastal cells belong to a reliable pooled segment for drogued / undrogued drifters, and 29 of 45 segments (64.4%) are reliable for both types. The median segment contains two coastal cells; 16 segments remain thin and are kept explicitly flagged rather than being merged over longer stretches of coastline. Pooling is used for coastal-segment summaries and later coastal-risk analysis only; it does not alter or smooth the main transition matrix.
 ## Using the transition matrix
 
 Each `.npz` file is a self-contained operator. `P[i, j]` is the probability that material in state `i` is in state `j` one lag τ later (`tau_days`).
@@ -193,5 +196,6 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Sensitivity to τ and grid size: τ = 2–5 days gives the same results; 1° is used (0.5° adds no skill and has 50% thin drogued rows, 2° loses short-range skill and shifts one-year fates)
 - [x] Seasonal matrices
 - [x] Chapman–Kolmogorov check: `P(3.5 d)^2` against direct 7-day transitions; median row TVD 0.243 / 0.173 for drogued / undrogued
+- [x] Coastal pooling: 103 coastal cells grouped into 45 short segments; 29 segments are reliable for both drogue types, with thin segments retained and flagged
 - [x] ERA5 winds at every drifter position; oil matrix = undrogued + the missing 1.5% windage (undrogued carries 2.0%), with a drogued + 3.5% check
 - [x] Whole-box analysis: accumulation zones, exit zones, residence time, almost-invariant regions
