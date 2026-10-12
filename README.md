@@ -74,17 +74,20 @@ python scripts/15_exit_zones.py            # eventual exit (W/E/S/N) or strandin
 python scripts/16_almost_invariant_regions.py  # spectral regions that keep material to themselves
 python scripts/17_release_point_maps.py    # release maps at 7, 30 and 365 days (needs 06)
 python scripts/18_sensitivity.py           # τ and grid sensitivity (needs 03 and 10 for every setting)
+python scripts/19_seasonal_matrices.py     # DJF/MAM/JJA/SON seasonal operators and TVD comparison
 ```
 
-Scripts `01`–`04` and `11`–`17` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1°, 2°; τ = 3.5 days):
+Scripts `01`–`04`, `11`–`17` and `19` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1°, 2°; τ = 3.5 days):
 
 ```bash
 python scripts/02_grid_coverage.py --res 0.5 1 2
 python scripts/03_transition_matrix.py --box 10 55 -41 -15 --res 1 --tau 2 3.5 5   # several grids / lags in one run
 python scripts/04_shipping_overlay.py --res 1 --tau 3.5                           # needs that matrix from 03
+python scripts/19_seasonal_matrices.py --res 1 --tau 3.5
+python scripts/19_seasonal_matrices.py --res 2 --tau 3.5   # coarser seasonal robustness check
 ```
 
-Outputs of `11`–`17` carry the grids and lags they were run on in their names (`{tag}`, e.g. `0p5-1-2deg_3p5d_10E-55E_45S-15S`), so runs at other settings do not overwrite each other.
+Outputs of `11`–`17` and `19` carry the grids and lags they were run on in their names (`{tag}`, e.g. `0p5-1-2deg_3p5d_10E-55E_45S-15S`), so runs at other settings do not overwrite each other.
 
 τ must be a whole number of hours. If a box side is not a multiple of the grid size (e.g. 45° at 2°), the last row or column is a partial cell cut off at the box edge.
 
@@ -111,6 +114,7 @@ Outputs of `11`–`17` carry the grids and lags they were run on in their names 
 | `16_almost_invariant_regions.py` | Four regions per drogue type that keep material to themselves, from spectral clustering of reliable cells; checked with the directional P (share staying after one step, 30 and 365 days) against longitude bands of the same sizes | `data/almost_invariant_regions_…csv`, `data/almost_invariant_cells_…csv`, `figures/agulhas_almost_invariant_…png` |
 | `17_release_point_maps.py` | Maps of where material from each release point from `04` is after 7, 30 and 365 days under both matrices, with the share afloat in R, each exit and stranded, and 95% intervals from `06` | `data/release_point_maps_…csv`, `figures/agulhas_release_{nn}_{point}_….png` |
 | `18_sensitivity.py` | Compares the reference (1°, τ = 3.5 d) with τ = 2 and 5 days and with 0.5° and 2° grids: held-out skill from `10` at common horizons, and the release points' one-year fates against the reference's bootstrap interval from `06` | `data/sensitivity_skill_{box}.csv`, `data/sensitivity_fates_{box}.csv`, `figures/agulhas_sensitivity_{box}.png` |
+| `19_seasonal_matrices.py` | Builds separate DJF, MAM, JJA and SON transition matrices for both drogue types, assigning each move to the season of its start observation. Reports seasonal row support, TVD against the annual operator, pairwise seasonal TVD on common reliable cells, and 30-day release-point sensitivity. The 2° run is used as a robustness check where 1° drogued seasonal support is sparse. | `data/P_{drogued,undrogued}_{DJF,MAM,JJA,SON}_…npz`, `data/seasonal_support_…csv`, `data/seasonal_tvd_cells_…csv`, `data/seasonal_pairwise_tvd_…csv`, `data/seasonal_release_30d_…csv`, `figures/agulhas_seasonal_summary_…png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
 
@@ -127,7 +131,7 @@ curl -L -o data/shipping/shipdensity_commercial.zip \
 ---
 ## Whole-box results
 
-At 1°, τ = 3.5 days, over reliable cells (≥ 10 drifters), drogued / undrogued unless stated. Scripts `11`–`17`.
+At 1°, τ = 3.5 days, over reliable cells (≥ 10 drifters), drogued / undrogued unless stated. Scripts `11`–`17` and `19`; seasonal robustness also uses 2°.
 
 - **Data support.** 78% of active drogued rows and 93% of undrogued rows are reliable at 1° (52% / 90% at 0.5°, 89% / 94% at 2°). Coastal cells are much thinner: 33% / 47% reliable at 1°, against 82% / 98% offshore, so coastal and stranding results carry wide intervals.
 - **Retention hotspots.** Drogued material is held longest at 41–44°E, 30–33°S, south-west of Madagascar: about 67–69% is still in R after a year (95% intervals about 52–75%), and 71 of the 75 hotspot cells stay in the top 10% in at least half of 1,000 drifter resamples. Undrogued material is held longest further east, at 48–51°E, 30–33°S (55–56%, intervals 49–60%). Where both grids are reliable, the 1° and 2° hotspots agree (Jaccard 66% drogued, 73% undrogued); 0.5° agrees less for drogued (30–36%), whose rows are thin. Retention after a year also reflects distance from the open edges of R, so a hotspot is a place R holds material, not necessarily a closed eddy.
@@ -135,6 +139,7 @@ At 1°, τ = 3.5 days, over reliable cells (≥ 10 drifters), drogued / undrogue
 - **Exit zones.** Most material eventually leaves east with the Return Current: 71% / 62% on average, and east is the most likely fate in 83% / 75% of cells. The west (Atlantic leakage) takes 20% / 17%, the most likely fate in a strip along the west coast and the retroflection. 15% of undrogued material strands, and stranding is the most likely undrogued fate along the Mozambique Channel coast and east of Madagascar; drogued stranding is 0.7%, a lower bound (see `03`).
 - **Almost-invariant regions.** Four regions for both drogue types: the retroflection and the Atlantic side, the Natal coast and Mozambique Channel, south of Madagascar and the Return Current, and east of Madagascar. They keep 81–94% of their material over one step and 55–70% over 30 days, and by a year only 1–9% remains in its own region. Three of the four keep 13–23 points more over 30 days than longitude bands of the same sizes; the western one matches its band, whose edge falls close to the retroflection anyway. The leading eigenvalues fall off smoothly, so four is a choice rather than a gap in the spectrum.
 - **Release points.** After a year, 19% (14–26%) of drogued material from Durban is still in R, 51% has left east and 22% west, the expected behaviour. Undrogued material from the Mozambique Channel lane (40.5°E, 16.5°S) and the lanes south of Madagascar strands far more: 24–66% after a year, against 0–2% drogued.
+- **Seasonality.** Four seasonal operators (DJF, MAM, JJA and SON) show detectable changes in transport. At 1°, undrogued seasonal support remains good (70–75% of ocean rows reliable), with 551 of 970 cells reliable in all four seasons; pairwise median TVD on those common cells is 0.35–0.38. Drogued seasonal coverage is much thinner at 1° (12–24% reliable; only 26 cells reliable in all four seasons), so those differences are treated cautiously. At 2°, drogued support improves to 41–51% per season and 71 of 263 cells are reliable in all four seasons, while broad seasonal differences remain (pairwise median TVD 0.20–0.24). Undrogued support at 2° is 84–88%, with pairwise median TVD 0.15–0.16. The seasonal results are descriptive sensitivity results rather than a formal significance test.
 
 ## Using the transition matrix
 
@@ -180,6 +185,6 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Release-point maps at 1 week, 1 month, 1 year
 - [x] Held-out validation (5-fold by drifter): calibrated exits and stranding, beats persistence and mean-current advection by 28 days
 - [x] Sensitivity to τ and grid size: τ = 2–5 days gives the same results; 1° is used (0.5° adds no skill and has 50% thin drogued rows, 2° loses short-range skill and shifts one-year fates)
-- [ ] Seasonal matrices
+- [x] Seasonal matrices
 - [x] ERA5 winds at every drifter position; oil matrix = undrogued + the missing 1.5% windage (undrogued carries 2.0%), with a drogued + 3.5% check
 - [x] Whole-box analysis: accumulation zones, exit zones, residence time, almost-invariant regions
