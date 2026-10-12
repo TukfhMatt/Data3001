@@ -13,22 +13,23 @@ Why the Agulhas:
 - GDP drifters sample it well: 5.95M hourly observations from 1,503 drifters in R.
 
 Why this box (`scripts/05_box_selection.py` scores boxes on data, shipping risk and retention):
-- Oil (undrogued) stays in R 136 days on average; 6.5% is still inside after a year.
+- Oil-like undrogued transport stays in R 136 days on average; 6.5% is still inside after a year in the box-selection calculation.
 - Contains 97% of the Cape Basin eddy energy (Agulhas rings) and the Mozambique Channel eddies.
 - Covers the coastal route around the Cape, the Mozambique Channel routes and the route south of Madagascar.
 - Passes the data rules with margin: 4.12M undrogued hourly observations, 92% of ocean cells seen by ≥ 10 drifters.
 
 
 What we track:
+
 Shipping container:
 - Modelled with drogued drifters, which follow ~15 m currents with almost no wind effect (windage), matching a mostly submerged or flooded container.
 
 Oil spill:
 - Surface oil drifts at roughly current + 3–3.5% of wind speed.
 - Modelled with undrogued drifters, which ride at the surface and slip downwind of drogued drifters by ~10–12 cm/s in the westerly and trade-wind bands (`scripts/07_wind_slip.py`). Against ERA5 winds that slip is 2.0% of the 10 m wind (`scripts/09_oil_wind.py`), a little over half of oil's windage.
-- Oil mass decays as m(t) = m0 · exp(−λt) with λ ≈ 1/14 per day (evaporation + emulsification), so results answer both "where is it?" and "how much surface oil remains after X days?".
 - ERA5 10 m winds (Copernicus Climate Data Store, cds.climate.copernicus.eu) supply the wind term. Undrogued motion already contains 2.0% windage, so the oil matrix adds only the missing 1.5% (3.5% − 2.0%) along each drifter's path; adding the full 3.5% would count the wind twice. A check matrix (drogued + 3.5% wind) tests that choice.
 - The measured 2.0% is everything that moves the surface differently from 15 m: direct windage on the drifter, wave-driven Stokes drift and wind-driven shear in the top 15 m. Subtracting it from 3.5% therefore treats oil's 3.5% as drift relative to the 15 m current. If the 3.5% is instead read as drift relative to the true surface current, the oil matrix adds too little wind, and the drogued + 3.5% check bounds that case.
+- The model represents transport of surface oil parcels only. Weathering, evaporation, emulsification, dissolution and sinking are not modelled, so results describe where surface material is transported rather than how much oil mass remains.
 
 Drogued and undrogued matrices are built and reported side by side and never pooled: an "all drifters" matrix is 46–84% undrogued depending on the cell, so its wind effect would follow sampling, not physics.
 
@@ -38,28 +39,31 @@ Data:
   - Native hourly resolution; positions interpolated across > 6 h between satellite fixes are dropped (0.3%).
   - The saved area (5°W–65°E, 60–5°S) covers R plus a margin, so positions just after a drifter leaves R are kept.
   - Key fields: `lon`, `lat`, `time`, `ve`/`vn` (velocity), `drogue_status`, `gap`, `rowsize`, `id`.
-  - Split by `drogue_status`: drogued → container matrix; undrogued → oil matrix.
+  - Split by `drogue_status`: drogued → container matrix; undrogued → oil-like surface matrix.
 - Commercial shipping density: World Bank / IMF Global Shipping Traffic Density, Commercial layer (AIS, Jan 2015–Feb 2021, CC-BY 4.0).
 - ERA5 10 m wind (u10, v10), 6-hourly on a 0.5° grid, R plus a 5° margin, for the oil wind term.
 
 
 Method (Ulam's method / transition matrix):
 1. Grid R into cells at 0.5°, 1° and 2°; 1° is the working grid. Land cells are masked.
-2. Transition time τ = 3.5 days, longer than the Lagrangian decorrelation time (~1.2–1.4 days) so the Markov assumption holds; drifters move about one cell per step.
+2. Transition time τ = 3.5 days, longer than the Lagrangian decorrelation time (~1.2–1.4 days); drifters move about one cell per step. The Markov approximation is checked separately with a Chapman–Kolmogorov comparison between `P(τ)^2` and transitions estimated directly at `2τ`.
 3. For every drifter position at time t in cell i, find where it is at t + τ (cell j). Count transitions C[i, j].
 4. Five absorbing states: four "exited R" states (W, E, S, N) record which edge material leaves by, and a "stranded" state records material that runs aground inside R. A drifter strands when GDP records its death as "ran aground" and its last observation lies in R; every position in its final τ moves to the stranded state.
 5. Row-normalise: P[i, j] = C[i, j] / Σ_j C[i, j]. Each row is "where does material in cell i go in τ days". A cell with no outgoing moves of its own (its drifters' records ended there for other reasons, such as failed transmitters) takes the pooled moves of the nearest ring of ocean cells around it.
 6. Iterate: distribution after n steps = p₀ · Pⁿ. 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
-7. Oil version: each undrogued move's end point is shifted by the missing windage (3.5% − the measured undrogued 2.0%) × the mean ERA5 wind along that move × τ, and the shifted moves are counted as in step 3. Moves into the stranded state are kept as they are. Mass decay exp(−t/14 d) is applied when reporting, so P conserves probability.
+7. Oil version: each undrogued move's end point is shifted by the missing windage (3.5% − the measured undrogued 2.0%) × the mean ERA5 wind along that move × τ, and the shifted moves are counted as in step 3. Moves into the stranded state are kept as they are. The matrix conserves probability and models transport only; oil weathering and mass loss are outside the scope of the model.
+
 
 Reliability:
 - Rows built from < 10 distinct drifters are flagged; cells with no outgoing moves of their own (rows pooled from neighbouring cells) are flagged separately.
 - `scripts/06_bootstrap.py` resamples whole drifters (never observations) to give 95% intervals for release-point results and a row-stability check (median bootstrap TVD > 0.2 = unstable).
 - Hourly positions are strongly correlated; the independent sample size is the number of drifters, not the observation count.
-- At 1 year most material has left R, so answers are "probability still in R" plus where it exited.
+- Coastal data are much thinner than offshore data. `scripts/21_coastal_pooling.py` therefore groups neighbouring coastal cells into short contiguous segments for coastal summaries, while leaving the main transition matrix unchanged. Segments that remain thin are retained and flagged.
+- At 1 year most material has left R, so answers are "probability still in R" plus where it exited or stranded.
 
 
 Analysis:
+
 Release points: 5 hotspots plus the busiest reliable shipping cells (`scripts/04_shipping_overlay.py`):
 - Richards Bay, Durban (major ports, in the core of the current)
 - Algoa Bay (ship-to-ship bunkering, off Gqeberha)
@@ -73,21 +77,26 @@ Whole-box structure:
 - Where R loses material: residence time (expected time before leaving or stranding) and the eventual fate (which edge, or stranded) of each cell, both exact from the absorbing chain's fundamental matrix N = (I − Q)⁻¹.
 - Which parts keep material to themselves: spectral clustering of the symmetrised transition matrix → almost-invariant regions, checked with the directional P against longitude bands of the same sizes.
 - Source vs sink cells: row and column sums of P.
+- Coastal support: neighbouring thin coastal cells are grouped into short coastal segments for coastal summaries and later traffic-weighted exposure analysis.
 
 
 Validation:
 - Held-out drifters (whole trajectories): their actual positions after 1 week / 1 month against the matrix predictions.
 - Sensitivity to grid size (0.5°, 1°, 2°) and τ (2 and 5 days).
-- Seasonal (summer / winter) matrices against the all-year matrix.
+- Four seasonal operators (DJF, MAM, JJA and SON) against the annual operator, with 2° used as a robustness check where 1° drogued seasonal support is sparse.
+- Chapman–Kolmogorov consistency: compare `P(3.5 d)^2` with transitions estimated directly at 7 days.
 - Drifter coverage over time (temporal plot), so no few years dominate the matrix.
 - Known features: current path, retroflection, rings heading into the Atlantic.
 
 
 Final output:
 - Transition matrices saved as `data/P_{drogued|undrogued}_{res}deg_{tau}d_{box}.npz` (P, counts, grid edges, τ, flags), with a usage example in the README.
-- Two versions: container (drogued) and oil (undrogued plus the missing ERA5 windage, with mass decay).
+- Two working transport versions: container (drogued) and oil (undrogued plus the missing ERA5 windage).
 - Maps for the release points at 1 week / 1 month / 1 year.
 - Maps of accumulation zones, exit zones, residence time and almost-invariant regions.
+- Seasonal transport operators and seasonal sensitivity summaries.
+- Chapman–Kolmogorov Markov-consistency diagnostics.
+- Pooled coastal segments for coastal support summaries and later traffic-weighted risk analysis.
 
 
 Progress:
@@ -96,13 +105,16 @@ Progress:
   - Ocean cells in R: 3,780 / 970 / 263 at 0.5° / 1° / 2° (the 45°-wide box at 2° ends in a partial 1° column).
   - Cells with ≥ 10 distinct drifters: drogued 52% / 78% / 90%, undrogued 90% / 92% / 93%.
   - Drogued data is thin on the Agulhas Bank shelf, off Namibia and in parts of the Mozambique Channel.
+
 - [x] Region, grid and lag are parameters (`scripts/config.py`, `--box --res --tau --data` on `01`–`04`); matrix file names include res, τ and box.
+
 - [x] Transition matrices, both drogue types, 0.5° / 1° / 2° — `scripts/03_transition_matrix.py`, helpers in `scripts/transport.py`.
   - Transitions: 1.77M drogued, 4.07M undrogued.
   - Stranding: 139 drifters ran aground in R (GDP `typedeath` 1, last observation in R and within a day of the record's end date). 137 were undrogued by then and 2 drogued, so the undrogued matrix has 10,159 moves into the stranded state across 89 coastal cells, and the drogued matrix 168. Drogues are almost always lost before or at grounding, so drogued stranding is a lower bound.
   - Flagged rows (< 10 drifters): drogued 50% / 24% / 12%, undrogued 11% / 8% / 7%. At 1°, 20 (drogued) and 8 (undrogued) cells have no outgoing moves and take their rows from neighbouring cells.
   - Per step at 1°: exit 2.4% drogued, 3.5% undrogued; stranding 0.01% drogued, 2.0% undrogued (mean over cells).
   - Release off Durban (31.5°E, 30.5°S), 1°, after 1 year: drogued 19% still in R, 52% exited E, 21% W, 3% stranded; undrogued 17% in R, 56% E, 19% W, 6% stranded. Across grids 16–21% stays in R, 49–57% exits east, 15–22% west.
+
 - [x] Release points from shipping traffic — `scripts/04_shipping_overlay.py`.
   - Shipping values are a relative density only (units undocumented and implausibly large; source artifact at ~40°S). The data predate the 2024 Red Sea diversions, so Cape traffic is higher today.
   - Mean surface current from drifters (1° cells with ≥ 300 hourly obs): max 1.23 m/s drogued, 1.34 m/s undrogued, in the Agulhas Current.
@@ -119,7 +131,9 @@ Progress:
     | Busiest lanes | 0.0–5.2 | 0.4–5.3 |
 
   - Algoa Bay's offshore cell sits in the Agulhas Current, so its undrogued score describes oil released there, not in the bay itself.
+
 - [x] Box scoring — `scripts/05_box_selection.py` (undrogued data): boxes containing the Agulhas core (18–33°E, 40–28°S), ≥ 5° inside the saved area so exits stay observable; data rules ≥ 1M undrogued hourly observations and ≥ 90% of ocean cells with ≥ 10 drifters; scored on shipping density per ocean cell and one-step retention → mean residence time. Box R's scores are listed under "Why this box". The 40–41°S band coincides with the shipping raster artifact, so shipping density near that latitude is less trustworthy.
+
 - [x] Drifter bootstrap — `scripts/06_bootstrap.py` (1°, τ = 3.5 d, 1,000 resamples of whole drifters: 799 drogued, 1,100 undrogued; the two types are resampled independently).
   - One-year fate with 95% intervals (drogued / undrogued):
 
@@ -137,6 +151,7 @@ Progress:
   - The intervals are not corrected for the number of points and metrics compared, so a single "differ" flag is weak evidence on its own.
   - Row stability (median bootstrap TVD > 0.2 = unstable): drogued 246 of 950 rows (26%), undrogued 54 of 962 (6%). Unstable drogued rows are concentrated in the Mozambique Channel and south of Madagascar. The two reliability checks pick different rows (drogued: 166 unstable rows pass the 10-drifter flag, 128 flagged rows are stable), so both are reported. The TVD understates the uncertainty of rows with very few drifters (a single-drifter row is either resampled whole or dropped), so the 10-drifter flag is the floor.
   - Outputs: `data/bootstrap_release_1deg_3p5d_10E-55E_45S-15S.csv`, `data/bootstrap_difference_…csv`, `data/bootstrap_rows_…npz`, `figures/agulhas_bootstrap_fates_…png`, `figures/agulhas_bootstrap_rows_…png`.
+
 - [x] Undrogued wind slip — `scripts/07_wind_slip.py` (1°, undrogued − drogued mean velocity, per-drifter means so no drifter dominates a cell; 746 cells with ≥ 10 drifters of each type; 95% intervals from 500 resamples of whole drifters).
 
     | Band | Cells | East (cm/s) | North (cm/s) | Speed | Points toward |
@@ -151,10 +166,12 @@ Progress:
   - The slip follows the winds: eastward under the westerlies south of ~38°S, west-north-westward under the south-east trades at 20–33°S, northward along the west coast. It is weakest at 30–40°S, under the subtropical high.
   - Single cells are noisy (drogued and undrogued drifters pass at different times; median per-cell slip 12.9 cm/s against a median drogued current of 21.4 cm/s), so band and block means are the robust result.
   - Outputs: `data/wind_slip_cells_1deg_10E-55E_45S-15S.csv`, `data/wind_slip_bands_…csv`, `figures/agulhas_wind_slip_…png`.
+
 - [x] Release-point maps at 1 week / 1 month / 1 year — `scripts/17_release_point_maps.py` (1°, τ = 3.5 d): one figure per point from `04`, drogued and undrogued, with the share afloat in R, each exit and stranded, and 95% intervals from `06`.
   - Durban (drogued) after a year: 19% (14–26%) still in R, 51% (43–59%) left east, 22% (15–29%) west, as expected.
   - Undrogued material strands far more than drogued: after a year 24–66% from the Mozambique Channel lane and the lanes south of Madagascar (drogued 0–2%), and 36–38% from Cape Town and Durban with wide intervals (5–64%), since coastal stranding rests on a few grounded drifters (see the oil version).
   - Outputs: `data/release_point_maps_1deg_3p5d_10E-55E_45S-15S.csv`, `figures/agulhas_release_{nn}_{point}_…png`.
+
 - [x] Held-out validation — `scripts/10_validation.py` (1°, τ = 3.5 d, 5-fold by drifter: 817 drogued / 1,170 undrogued drifters each held out once; daily test starts followed at whole τ steps, exits and stranding absorbing).
 
     | Type | Horizon | Test starts | Markov error | Advection (cell centre) | Persistence (cell centre) | Log score Markov / climatology | Exit pred / obs | Stranded pred / obs |
@@ -168,6 +185,7 @@ Progress:
 
   - Errors are median distances from the forecast (Markov: centre of mass of the predicted distribution still in R) to the actual position. Baselines start from the cell centre, the same information the matrix has; from the exact start position they are ~10 km better at 3.5 d, which is the 1° grid's own error.
   - The matrix ties the baselines at 3.5 d and beats them by 28 d (5–6% vs advection, 15–23% vs persistence). Its main value is the distribution: the log score is far above climatology at every horizon, the predicted share leaving R matches the observed share (calibration within a few points across the full 0–1 range at 28 d), and the predicted share stranding matches what held-out drifters do at every horizon.
+
 - [x] Sensitivity to τ and grid size — `scripts/18_sensitivity.py`: reference 1°, τ = 3.5 d against τ = 2 and 5 d at 1°, and 0.5° and 2° at τ = 3.5 d, each with its own held-out validation from `10`; the 13 release points' one-year fates (still in R, exited W, exited E, stranded) are checked against the reference's 95% bootstrap interval from `06`.
 
     | Setting | Flagged rows | 28-day error | Skill vs persistence at 7 / 28 d | Exit pred / obs at 28 d | Stranded pred / obs at 28 d (undrogued) | One-year fates inside the reference interval |
@@ -179,14 +197,41 @@ Progress:
     | 2°, τ = 3.5 d | 12% / 7% | 262 / 299 km | −18% / 11%, −4% / 20% | 19.5 / 19.1%, 15.8 / 15.6% | 1.85 / 1.97% | 47 / 52, 36 / 52 |
 
     Pairs are drogued, undrogued. Skill is against persistence from the exact start, a baseline that does not depend on the grid; horizons between whole steps are interpolated linearly.
+
   - τ does not change the results. From 2 to 5 days the forecast errors move by ≤ 1 km, exit and stranding calibration by < 1 point, and every one-year fate stays inside the reference interval; 28-day centres of mass move 11–21 km (median), well under one cell. τ = 3.5 d is used for all versions.
   - 1° is used for all versions. 0.5° matches 1° on skill (28-day error within 2 km) and on one-year fates (99 of 104 inside the reference interval; undrogued stranding moves by up to 24 points at single points), but under-predicts exits by about 1 point at 28 days and has 50% flagged drogued rows. 2° loses short-range skill (worse than persistence at 7 days), shifts 28-day centres of mass by 55–82 km (median) and moves one-year fates outside the reference interval at 21 of 104 checks, mostly undrogued.
   - Outputs: `data/sensitivity_skill_10E-55E_45S-15S.csv`, `data/sensitivity_fates_…csv`, `figures/agulhas_sensitivity_…png`, and `data/validation_summary_{res}deg_{tau}d_…csv` for every setting.
-- [ ] Seasonal (summer / winter) matrices.
+
+- [x] Seasonal matrices — `scripts/19_seasonal_matrices.py`.
+  - Four operators per drogue type: DJF, MAM, JJA and SON, with each move assigned by the season of its start observation.
+  - At 1°, undrogued seasonal support remains good: 70–75% of ocean rows are reliable per season, and 551 of 970 cells are reliable in all four seasons. Pairwise median TVD over common reliable cells is 0.35–0.38.
+  - Drogued seasonal support is sparse at 1°: 12–24% of rows are reliable per season and only 26 cells are reliable in all four seasons.
+  - At 2°, drogued support improves to 41–51% per season and 71 of 263 cells are reliable in all four seasons; pairwise median TVD remains 0.20–0.24.
+  - Undrogued support at 2° is 84–88%, with pairwise median TVD 0.15–0.16.
+  - Seasonal results are treated as descriptive sensitivity results rather than a formal significance test.
+
+- [x] Chapman–Kolmogorov consistency — `scripts/20_chapman_kolmogorov.py`.
+  - Compares `P(3.5 d)^2` with an operator estimated directly from 7-day drifter transitions.
+  - Common reliable rows: 731 drogued and 892 undrogued.
+  - Median row-wise TVD is 0.243 for drogued and 0.173 for undrogued drifters; the 90th percentiles are 0.377 / 0.261.
+  - TVD is below 0.25 for 53.2% / 87.1% of common reliable rows and below 0.50 for 98.8% / 99.8%.
+  - Agreement is stronger for undrogued drifters and moderate for drogued drifters.
+  - The result supports the 3.5-day operator as an approximate Markov representation rather than establishing exact Markov behaviour; the TVD thresholds are descriptive rather than pass/fail criteria.
+
+- [x] Coastal pooling — `scripts/21_coastal_pooling.py`.
+  - At 1°, τ = 3.5 d, the 103 coastal cells are grouped into 45 contiguous coastal segments, capped at four neighbouring cells per segment.
+  - Before pooling, 33.3% of active drogued coastal rows and 46.9% of active undrogued coastal rows are reliable.
+  - After pooling, 58.3% / 69.9% of coastal cells belong to a reliable pooled segment for drogued / undrogued drifters.
+  - 29 of 45 segments (64.4%) are reliable for both drogue types.
+  - Median segment size is two coastal cells; 16 segments remain thin and are retained and explicitly flagged.
+  - Pooling is used for coastal summaries and later traffic-weighted coastal-risk analysis only; it does not alter or smooth the main transition matrix.
+
 - [x] ERA5 winds — `scripts/08_fetch_era5.py`: 10 m wind (0.5°, 6-hourly, 1995–2022) from the Copernicus CDS API, interpolated to 10.03M drifter positions (99.9% of positions in R).
+
 - [x] Oil version — `scripts/09_oil_wind.py` (1°, τ = 3.5 d).
-  - Undrogued windage: 2.0% of the 10 m wind (95% interval 1.81–2.19%, resampling whole drifters over the 746 cells with ≥ 10 drifters of each type), from regressing the per-cell slip (undrogued − drogued velocity) on the ERA5 wind at undrogued positions. The estimate holds without the fast-current cells (2.2%) and east of 35°E (2.1%). The oil matrix adds 1.5%: a median shift of 25 km per step (90th percentile 42 km); 0.01% of shifted ends land on land or unvisited cells and keep their drifter end.
-  - Share of released parcels stranded within 30 days, before weathering, with 95% intervals from resampling whole drifters (oil in `09`, undrogued from `06`). "Grounded" is the number of drifters that ran aground starting from the release cell itself; stranding also arrives from neighbouring cells, so a point with none can still strand.
+  - Undrogued windage: 2.0% of the 10 m wind (95% interval 1.81–2.19%, resampling whole drifters over the 746 cells with ≥ 10 drifters of each type), from regressing the per-cell slip (undrogued − drogued velocity) on the ERA5 wind at undrogued positions. The estimate holds without the fast-current cells (2.2%) and east of 35°E (2.1%).
+  - The oil matrix adds 1.5%: a median shift of 25 km per step (90th percentile 42 km); 0.01% of shifted ends land on land or unvisited cells and keep their drifter end.
+  - Share of released parcels stranded within 30 days, with 95% intervals from resampling whole drifters (oil in `09`, undrogued from `06`). "Grounded" is the number of drifters that ran aground starting from the release cell itself; stranding also arrives from neighbouring cells, so a point with none can still strand.
 
     | Release point | Undrogued | Oil | Check (drogued + 3.5%) | Grounded |
     |---|---|---|---|---|
@@ -201,11 +246,11 @@ Progress:
     | Lane 27.5°E, 33.5°S | 6% (2–11) | 7% (3–12) | 3% | 3 |
     | Lanes 43.5°E and 50.5–54.5°E | 0–1% (0–2) | 2–3% (1–5) | 0% | 0 |
 
-    The high coastal shares rest on few groundings: Durban's 35% comes from 2 drifters in its cell, and its interval runs from 1% to 62%. Treat the three ~35% points as "a large share may strand within a month", not as a precise rate; the three agree to the percent by coincidence. The oil–undrogued differences at single points sit well inside these intervals.
-
-  - The added windage moves oil out of R faster than undrogued material: after a year 1–21% is still afloat in R from the lanes and 0–8% from the hotspots (undrogued 3–43% and 0–16%). These one-year shares are much better constrained than stranding (intervals about ±5 points, in `oil_compare_…csv`), oil is below undrogued wherever any remains, and the two intervals do not overlap at Algoa Bay, Richards Bay and every lane except 40.5°E, 16.5°S (they overlap there and at Durban). Surface oil left after weathering: 61% at 7 days, 12% at 30 days.
+  - The high coastal shares rest on few groundings: Durban's 35% comes from 2 drifters in its cell, and its interval runs from 1% to 62%. Treat the three ~35% points as "a large share may strand within a month", not as a precise rate; the three agree to the percent by coincidence. The oil–undrogued differences at single points sit well inside these intervals.
+  - The added windage moves oil out of R faster than undrogued material: after a year 1–21% is still afloat in R from the lanes and 0–8% from the hotspots (undrogued 3–43% and 0–16%). These one-year shares are much better constrained than stranding (intervals about ±5 points, in `oil_compare_…csv`), oil is below undrogued wherever any remains, and the two intervals do not overlap at Algoa Bay, Richards Bay and every lane except 40.5°E, 16.5°S (they overlap there and at Durban).
   - The oil and check matrices differ by TVD 0.20–0.52 at 30 days. Most of the gap at Durban, Cape Town and the Mozambique Channel lane is stranding, which the drogued data barely contains (see `03`); for oil still afloat the two agree within 0.16–0.28 everywhere except the Mozambique Channel lane (0.37), where drogued rows are thin. The oil matrix is the working version.
   - Outputs: `data/P_oil_1deg_3p5d_10E-55E_45S-15S.npz`, `data/P_oil_check_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png`.
+
 - [x] Whole-box structure — `scripts/11`–`16` (all grids at τ = 3.5 d, both drogue types; numbers below at 1°, drogued / undrogued, over reliable cells).
   - Support (`11`, `12`): 78% / 93% of active rows reliable (0.5°: 52% / 90%; 2°: 89% / 94%). Coastal cells (land neighbour on the grid): 33% / 47% reliable, against 82% / 98% offshore.
   - Retention hotspots (`13`): drogued at 41–44°E, 30–33°S, 67–69% still in R after a year (95% intervals about 52–75%); 71 of 75 hotspot cells stay in the top 10% in ≥ 50% of 1,000 drifter resamples. Undrogued at 48–51°E, 30–33°S, 55–56% (49–60%), 88 of 90 stable. Where both grids are reliable, 1° and 2° hotspots agree (Jaccard 66% / 73%); 0.5° drogued agrees less (30–36%).
@@ -214,7 +259,9 @@ Progress:
   - Almost-invariant regions (`16`): four for both drogue types (retroflection and Atlantic side; Natal coast and Mozambique Channel; south of Madagascar and Return Current; east of Madagascar), keeping 81–94% over one step, 55–70% over 30 days and 1–9% over a year. Three keep 13–23 points more over 30 days than longitude bands of the same sizes; the western one matches its band. The eigenvalues fall off smoothly, so four regions is a choice.
   - Outputs: `data/whole_box_support_…csv`, `data/coastal_support_…csv`, `data/retention_*_…csv`, `data/residence_time_*…csv`, `data/exit_zones_*…csv`, `data/almost_invariant_*…csv` and the matching `figures/agulhas_*` maps.
 
+
 Open questions:
-- At 1° the drogued matrix has 24% of rows flagged (< 10 drifters) and 26% unstable under the bootstrap, mostly in the Mozambique Channel and south of Madagascar. Merge or smooth thin cells there?
-- Drogued stranding rests on 2 drifters, since drogues are lost before or at grounding. Should the container version borrow the undrogued stranding rate in coastal cells, or report its stranding as a lower bound?
-- How much weight goes on seasonal matrices vs one all-year matrix?
+- Drogued stranding rests on only 2 grounded drifters, since drogues are commonly lost before or at grounding. The drogued stranding estimate is therefore treated as a lower bound rather than borrowing the undrogued rate.
+- Coastal sparsity is mitigated with short pooled coastal segments, while the main transition matrix remains unchanged and thin segments remain flagged.
+- The annual 1°, τ = 3.5 d operator remains the baseline. Seasonal operators are reported as a descriptive sensitivity analysis, with 2° used where drogued seasonal support is sparse.
+- Next: traffic-weighted exposure by coastal segment and time to shore from each shipping lane.
