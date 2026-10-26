@@ -219,12 +219,15 @@ Progress:
   - The result supports the 3.5-day operator as an approximate Markov representation rather than establishing exact Markov behaviour; the TVD thresholds are descriptive rather than pass/fail criteria.
 
 - [x] Coastal pooling — `scripts/21_coastal_pooling.py`.
-  - At 1°, τ = 3.5 d, the 103 coastal cells are grouped into 45 contiguous coastal segments, capped at four neighbouring cells per segment.
-  - Before pooling, 33.3% of active drogued coastal rows and 46.9% of active undrogued coastal rows are reliable.
-  - After pooling, 58.3% / 69.9% of coastal cells belong to a reliable pooled segment for drogued / undrogued drifters.
-  - 29 of 45 segments (64.4%) are reliable for both drogue types.
-  - Median segment size is two coastal cells; 16 segments remain thin and are retained and explicitly flagged.
-  - Pooling is used for coastal summaries and later traffic-weighted coastal-risk analysis only; it does not alter or smooth the main transition matrix.
+  - At 1°, τ = 3.5 d, a conservative Natural Earth 50m land-proximity filter removes four offshore candidates from the original 103 coastal cells, leaving 99 cells.
+  - The 99 coastal cells are grouped into 44 contiguous coastal segments, capped at four neighbouring cells per segment.
+  - Before pooling, 35.0% of active drogued coastal rows and 48.9% of active undrogued coastal rows are reliable (≥ 10 distinct drifters).
+  - After pooling, 60.6% / 72.7% of coastal cells belong to a reliable pooled segment for drogued / undrogued drifters.
+  - 29 of 44 segments (65.9%) are reliable for both drogue types.
+  - Median segment size is two coastal cells; 15 segments remain thin and explicitly flagged.
+  - The geographic filter only removes candidates from the existing coastal-cell set; it does not add potentially missing near-land cells.
+  - Scripts `04`, `06`, `09` and `12` retain the original coastal-cell definition.
+  - Pooling does not alter or smooth the main transition matrix.
 
 - [x] ERA5 winds — `scripts/08_fetch_era5.py`: 10 m wind (0.5°, 6-hourly, 1995–2022) from the Copernicus CDS API, interpolated to 10.03M drifter positions (99.9% of positions in R).
 
