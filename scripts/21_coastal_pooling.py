@@ -4,8 +4,13 @@ Agulhas Region — Coastal Cell Pooling
 Pools thin neighbouring coastal cells into contiguous coastal segments to
 reduce the sampling problem near shore.
 
-A coastal cell is defined in the same way as elsewhere in the pipeline:
-an ocean cell with a non-ocean neighbour on the grid.
+A coastal candidate is an ocean cell next to a non-model-ocean cell on
+the grid. For this coastal-pooling analysis ONLY, such candidates are
+conservatively filtered by Natural Earth 50m land polygons: mapped land
+must intersect the candidate's cell or one of its eight neighbours.
+This removes suspect offshore candidates; it does not exhaustively
+identify all coastal ocean cells. Scripts 04/06/09/12 retain the
+original model-neighbour coastal definition.
 
 The pooling is deliberately separate from the main transition operator.
 It does not overwrite P. Instead it creates a shared coastal segmentation
@@ -239,9 +244,86 @@ for name, op in ops.items():
         )
 
 
-coast = coastal_states(
-    reference
+# Production coastal-pooling filter: retain the established model-neighbour coastal
+# candidates only if independent Natural Earth 50m land is in the same or
+# an immediately adjacent grid cell. This removes obvious offshore artefacts
+# caused by confusing unobserved sea cells with land. It is NOT a full
+# independent redefinition of all physical coastal cells.
+coast_model_candidates = coastal_states(reference)
+try:
+    import cartopy.io.shapereader as ne_reader
+    from shapely.geometry import box as geo_box
+    from shapely.ops import unary_union
+    from shapely.prepared import prep
+except ImportError as exc:
+    raise SystemExit(
+        "Geographic review needs cartopy and shapely. Install with:\n"
+        "  python -m pip install cartopy shapely"
+    ) from exc
+
+try:
+    ne_bounds = geo_box(
+        LON_MIN - 2 * RES,
+        LAT_MIN - 2 * RES,
+        LON_MAX + 2 * RES,
+        LAT_MAX + 2 * RES,
+    )
+    ne_path = ne_reader.natural_earth(
+        resolution="50m", category="physical", name="land"
+    )
+    land_pieces = [
+        geom for geom in ne_reader.Reader(ne_path, bbox=ne_bounds.bounds).geometries()
+        if not geom.is_empty and geom.intersects(ne_bounds)
+    ]
+    if not land_pieces:
+        raise ValueError("No Natural Earth land polygons overlap the study area")
+    land_prepared = prep(unary_union(land_pieces))
+except Exception as exc:
+    raise SystemExit(
+        f"Failed to load Natural Earth 50m land data: {exc}\n"
+        "The first run may need an internet connection. Original script untouched."
+    ) from exc
+
+ne_lon_edges = reference["lon_edges"].astype(float)
+ne_lat_edges = reference["lat_edges"].astype(float)
+ne_land_in_cell = np.zeros((n_lat, n_lon), dtype=bool)
+for jj in range(n_lat):
+    for ii in range(n_lon):
+        cell_box = geo_box(
+            ne_lon_edges[ii], ne_lat_edges[jj],
+            ne_lon_edges[ii + 1], ne_lat_edges[jj + 1],
+        )
+        ne_land_in_cell[jj, ii] = land_prepared.intersects(cell_box)
+
+# Use the same 8-neighbour geographic check as verify_data3001_coast.py.
+ne_pad = np.pad(ne_land_in_cell, 1, constant_values=False)
+ne_near_land = np.zeros_like(ne_land_in_cell)
+for dj in (-1, 0, 1):
+    for di in (-1, 0, 1):
+        ne_near_land |= ne_pad[
+            1 + dj:1 + dj + n_lat,
+            1 + di:1 + di + n_lon,
+        ]
+
+ne_near_model_states = ne_near_land.ravel()[cells]
+coast = coast_model_candidates & ne_near_model_states
+rejected_coastal = np.flatnonzero(coast_model_candidates & ~ne_near_model_states)
+print(
+    f"Natural Earth 50m coastal filter: {coast_model_candidates.sum()} original candidates; "
+    f"{coast.sum()} retained; {len(rejected_coastal)} removed as not near mapped land"
 )
+if len(rejected_coastal):
+    for state in rejected_coastal:
+        raw = int(cells[state])
+        jj, ii = divmod(raw, n_lon)
+        centre_lon = (ne_lon_edges[ii] + ne_lon_edges[ii + 1]) / 2
+        centre_lat = (ne_lat_edges[jj] + ne_lat_edges[jj + 1]) / 2
+        print(f"  excluded state {state}: lon={centre_lon:.3f}, lat={centre_lat:.3f}")
+print(
+    "WARNING: This is a conservative FILTER of the existing candidate set; "
+    "near-land cells outside that set are not added."
+)
+
 
 coastal_states_idx = np.where(
     coast
@@ -1410,6 +1492,7 @@ np.savez_compressed(
     ),
     min_drifters=MIN_DRIFTERS,
     max_pool_cells=MAX_POOL_CELLS,
+    coast_definition="original_model_neighbours_and_NaturalEarth50m_land_8neighbours",
 )
 
 
