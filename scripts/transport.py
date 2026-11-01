@@ -153,6 +153,16 @@ def move_indices(traj_idx, t, in_box, tau_days, strand_t):
             np.r_[np.zeros(len(s1), bool), np.ones(len(s2), bool)][order])
 
 
+def same_drogue(drogue, start, end, stranded, flag):
+    """Moves that count for one drogue type (flag True = drogued). An ordinary
+    move needs that status at both ends. A move into the stranded state needs
+    it at the start only: the flag often flips to undrogued in a record's last
+    hours (16 of 137 drifters that ran aground in R, and as often for those
+    that stopped transmitting; see 22), so the last fix does not show how the drifter
+    reached the coast."""
+    return (drogue[start] == flag) & ((drogue[end] == flag) | stranded)
+
+
 def pair_indices(traj_idx, t, in_box, tau_days):
     """Indices (start, end) of obs pairs from one drifter exactly τ apart, with
     the start inside the box. Data must be sorted by (trajectory, time), so a

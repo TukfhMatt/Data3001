@@ -45,8 +45,8 @@ import xarray as xr
 
 from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
 from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
-                       move_indices, propagate, release, resampled_counts, row_normalise, state_of,
-                       strand_times, to_grid, transition_states)
+                       move_indices, propagate, release, resampled_counts, row_normalise,
+                       same_drogue, state_of, strand_times, to_grid, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -177,7 +177,7 @@ def build(name, drogue_flag, alpha):
     from_state, to_state = transition_states(ext_cell, cells, s, n + np.arange(len(s)),
                                              ext_lon, ext_lat, args.box)
     # Stranding moves of this drogue type, unshifted
-    k = (drogue[strand_s] == drogue_flag) & (drogue[strand_e] == drogue_flag)
+    k = same_drogue(drogue, strand_s, strand_e, True, drogue_flag)
     f2, t2 = transition_states(cell_flat, cells, strand_s[k], strand_e[k], lon, lat, args.box,
                                np.ones(k.sum(), bool))
     from_state, to_state = np.r_[from_state, f2], np.r_[to_state, t2]

@@ -38,7 +38,7 @@ import matplotlib.pyplot as plt
 import xarray as xr
 
 from config import DROGUE_TYPES, box_tag, grid_shape, parse_args
-from transport import (EXIT_LABELS, STRANDED, last_obs_index, move_indices, row_normalise,
+from transport import (EXIT_LABELS, STRANDED, move_indices, row_normalise, same_drogue,
                        strand_times, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -79,7 +79,6 @@ cell_lat = np.minimum(LAT_MIN + (cj + 0.5) * RES, LAT_MAX)
 key = traj_idx.astype(np.int64) * 10**10 + t
 tau_s = int(round(TAU * 86400))
 strand_t = strand_times(ds, traj_idx, t, in_R)
-last_obs = last_obs_index(traj_idx)
 start_all, end_all, strand_all = move_indices(traj_idx, t, in_R, TAU, strand_t)   # all moves from R
 
 
@@ -119,8 +118,7 @@ def test_samples(flag, test_traj):
         has = j >= 0
         has[has] &= drogue[j[has]] == flag        # same drogue type, as in training
         cand = alive & ~exited
-        strands = (cand & ~has & (strand_t[s0] >= 0) & (strand_t[s0] < t[s0] + k * tau_s)
-                   & (drogue[last_obs[s0]] == flag))
+        strands = cand & ~has & (strand_t[s0] >= 0) & (strand_t[s0] < t[s0] + k * tau_s)
         state[strands, k] = n_cells + STRANDED
         exited |= strands
         alive &= ~(cand & ~has & ~strands)         # lost: no matching observation
@@ -137,8 +135,8 @@ def test_samples(flag, test_traj):
 
 # ── 3. Training matrix and baselines for one fold ────────────────────────────
 def train_fold(flag, train_traj):
-    keep = (np.isin(traj_idx[start_all], train_traj) & (drogue[start_all] == flag)
-            & (drogue[end_all] == flag))
+    keep = (np.isin(traj_idx[start_all], train_traj)
+            & same_drogue(drogue, start_all, end_all, strand_all, flag))
     s, e = start_all[keep], end_all[keep]
     fs, ts = transition_states(cell_flat, cells, s, e, lon, lat, args.box, strand_all[keep])
     C = np.zeros((n_states, n_states))

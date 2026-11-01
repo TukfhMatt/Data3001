@@ -56,6 +56,7 @@ from transport import (
     coastal_states,
     load_operator,
     move_indices,
+    same_drogue,
     strand_times,
 )
 
@@ -457,10 +458,7 @@ drifters_by_state = {
 
 for name, flag in DROGUE_TYPES.items():
 
-    same_type = (
-        (drogue[start] == flag)
-        & (drogue[end] == flag)
-    )
+    same_type = same_drogue(drogue, start, end, stranded, flag)
 
     s = start[
         same_type

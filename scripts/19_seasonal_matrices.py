@@ -50,6 +50,7 @@ from transport import (
     load_operator,
     move_indices,
     row_normalise,
+    same_drogue,
     state_of,
     strand_times,
     transition_states,
@@ -192,10 +193,7 @@ def build_seasonal(name, drogue_flag, season):
     season_mask = np.isin(start_month, SEASONS[season])
 
     # Same drogue-type rule as script 03.
-    same_type = (
-        (drogue[start] == drogue_flag)
-        & (drogue[end] == drogue_flag)
-    )
+    same_type = same_drogue(drogue, start, end, stranded, drogue_flag)
 
     use = season_mask & same_type
     s, e, st = start[use], end[use], stranded[use]
