@@ -208,16 +208,24 @@ Progress:
   - At 1°, undrogued seasonal support remains good: 70–75% of ocean rows are reliable per season, and 544 of 970 cells are reliable in all four seasons. Pairwise median TVD over common reliable cells is 0.35–0.38.
   - Drogued seasonal support is sparse at 1°: 12–25% of rows are reliable per season and only 26 cells are reliable in all four seasons.
   - At 2°, drogued support improves to 41–51% per season and 72 of 263 cells are reliable in all four seasons; pairwise median TVD remains 0.20–0.24.
-  - Undrogued support at 2° is 84–88%, with pairwise median TVD 0.15–0.16.
-  - Seasonal results are treated as descriptive sensitivity results rather than a formal significance test.
+  - Undrogued support at 2° is 84–88%, with pairwise median TVD 0.15–0.17.
+  - Permutation test (200 shuffles of the season labels of 4,617 blocks, each one drifter's moves in one season of one year; median row TVD per season pair over cells reliable in both seasons):
+
+    | | 1° observed / shuffled | Pairs with p ≤ 0.05 (1°) | 2° observed / shuffled | Pairs with p ≤ 0.05 (2°) |
+    |---|---|---|---|---|
+    | Drogued | 0.44–0.54 / 0.50–0.54 | 0 of 6 | 0.20–0.24 / 0.20–0.21 | 1 of 6 (DJF–SON) |
+    | Undrogued | 0.35–0.37 / 0.35 | 4 of 6 | 0.15–0.17 / 0.14–0.15 | 5 of 6 |
+
+  - Drogued (15 m) transport shows no seasonal change beyond sampling noise: its large pairwise TVD is what four matrices built from a quarter of the data each differ by anyway. Undrogued transport does change with season, consistent with seasonal winds acting through windage, but only by 0.01–0.02 TVD above the shuffled level. MAM–JJA is the one undrogued pair alike at both grids.
+  - The p-values are per pair and not corrected for the 24 tests; with 200 shuffles the smallest possible p is 0.005. The annual operator stays the baseline, with the seasonal operators as a sensitivity check.
 
 - [x] Chapman–Kolmogorov consistency — `scripts/20_chapman_kolmogorov.py`.
   - Compares `P(3.5 d)^2` with an operator estimated directly from 7-day drifter transitions.
   - Common reliable rows: 729 drogued and 892 undrogued.
   - Median row-wise TVD is 0.242 for drogued and 0.173 for undrogued drifters; the 90th percentiles are 0.374 / 0.262.
   - TVD is below 0.25 for 53.4% / 86.9% of common reliable rows and below 0.50 for 99.0% / 99.8%.
-  - Agreement is stronger for undrogued drifters and moderate for drogued drifters.
-  - The result supports the 3.5-day operator as an approximate Markov representation rather than establishing exact Markov behaviour; the TVD thresholds are descriptive rather than pass/fail criteria.
+  - Almost all of that TVD is sampling noise in the direct 7-day rows. Resampling whole drifters 1,000 times (781 drogued, 1,088 undrogued) gives a median noise TVD of 0.223 / 0.168 per row, so the TVD beyond noise is 0.015 / 0.003 (median). Only 2.1% / 4.0% of rows exceed the 95th percentile of their own noise, about the share expected by chance.
+  - The noise level leaves out the smaller noise in `P(3.5 d)^2`, which would raise it further, so the comparison leans towards flagging rows. Within sampling noise the 3.5-day operator is Markov at 1°: the drogued rows' larger TVD comes from their thinner data, not from memory beyond τ.
 
 - [x] Coastal pooling — `scripts/21_coastal_pooling.py`.
   - At 1°, τ = 3.5 d, a conservative Natural Earth 50m land-proximity filter removes four offshore candidates from the original 103 coastal cells, leaving 99 cells.
@@ -267,5 +275,5 @@ Progress:
 Open questions:
 - Drogued stranding rests on the few drifters still drogued when they reached the coast, since 119 of the 137 grounded drifters lost their drogue more than τ before grounding (`22`). The drogued stranding estimate is therefore treated as a lower bound rather than borrowing the undrogued rate.
 - Coastal sparsity is mitigated with short pooled coastal segments, while the main transition matrix remains unchanged and thin segments remain flagged.
-- The annual 1°, τ = 3.5 d operator remains the baseline. Seasonal operators are reported as a descriptive sensitivity analysis, with 2° used where drogued seasonal support is sparse.
+- The annual 1°, τ = 3.5 d operator remains the baseline. Drogued transport shows no seasonality beyond sampling noise and undrogued transport only a small one (permutation test in `19`), so the seasonal operators serve as a sensitivity check.
 - Next: traffic-weighted exposure by coastal segment and time to shore from each shipping lane.

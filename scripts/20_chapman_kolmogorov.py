@@ -22,6 +22,13 @@ The script also reports differences in:
   - each absorbing fate (W/E/S/N/stranded)
   - share of reliable rows with TVD below 0.25 and 0.50
 
+Part of any row's TVD is sampling noise in the direct 2*tau row, which is
+estimated from a finite number of drifters. Resampling whole drifters
+(N_BOOT times, as in 06) gives each row's noise level: the TVD between a
+bootstrap 2*tau row and the full-data row. A row departs from the Markov
+prediction by more than noise when its TVD exceeds the 95th percentile of its
+bootstrap TVD.
+
 The TVD thresholds are descriptive summaries, not pass/fail criteria.
 
 The direct 2*tau matrices must already exist. For the baseline setting:
@@ -37,9 +44,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 from config import (
     DROGUE_TYPES,
+    grid_shape,
     operator_path,
     parse_args,
     setting_tag,
@@ -47,8 +56,14 @@ from config import (
 
 from transport import (
     cell_centres,
+    drifter_counts,
     load_operator,
+    move_indices,
     reliable,
+    resampled_counts,
+    same_drogue,
+    strand_times,
+    transition_states,
 )
 
 
@@ -62,6 +77,9 @@ args = parse_args(
 RES = args.res
 TAU = args.tau
 DIRECT_TAU = 2 * TAU
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
+N_BOOT = 1000
+SEED = 0
 
 TAG = setting_tag(
     RES,
@@ -221,7 +239,75 @@ for name in DROGUE_TYPES:
     )
 
 
-# ── 3. Chapman-Kolmogorov comparison ─────────────────────────────────────────
+# ── 3. Sampling noise of the direct 2*tau rows ───────────────────────────────
+# Rebuild the direct 2*tau counts per drifter (they must match 03 exactly),
+# then resample whole drifters: each row's bootstrap TVD against the full-data
+# row is the TVD that sampling alone produces for that row.
+ds = xr.open_dataset(args.data)
+lon = ds["lon"].values.astype(float)
+lat = ds["lat"].values.astype(float)
+drogue = ds["drogue_status"].values.astype(bool)
+t = ds["time"].values.astype("datetime64[s]").astype(np.int64)
+traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
+in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
+n_lon, _ = grid_shape(args.box, RES)
+cell_flat = np.where(
+    in_R,
+    ((lat - LAT_MIN) // RES).astype(int) * n_lon + ((lon - LON_MIN) // RES).astype(int),
+    -1,
+)
+start, end, stranded = move_indices(
+    traj_idx, t, in_R, DIRECT_TAU, strand_times(ds, traj_idx, t, in_R)
+)
+
+rng = np.random.default_rng(SEED)
+noise = {}
+
+print()
+for name, flag in DROGUE_TYPES.items():
+    op_direct = operators[name][1]
+    cells = op_direct["cell_flat"]
+    n_cells = len(cells)
+    n_states = op_direct["P"].shape[0]
+
+    keep = same_drogue(drogue, start, end, stranded, flag)
+    s, e = start[keep], end[keep]
+    f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box, stranded[keep])
+    counts = drifter_counts(traj_idx[s], f, to, n_states)
+    C = np.bincount(
+        counts[1], weights=counts[2], minlength=n_states**2
+    ).reshape(n_states, n_states)
+    if not np.array_equal(C, op_direct["C"]):
+        raise SystemExit(
+            f"Rebuilt {DIRECT_TAU:g}-day counts differ from the saved {name} matrix. "
+            f"Rebuild it with:\n  python scripts/03_transition_matrix.py "
+            f"--res {RES:g} --tau {DIRECT_TAU:g}"
+        )
+
+    rows = C[:n_cells]
+    total = rows.sum(axis=1)
+    P_rows = rows / np.maximum(total, 1)[:, None]
+
+    boot_tvd = np.full((N_BOOT, n_cells), np.nan)
+    for b in range(N_BOOT):
+        Cb = resampled_counts(counts, n_states, rng)[:n_cells]
+        tb = Cb.sum(axis=1)
+        ok = (tb > 0) & (total > 0)      # a resample can miss every drifter of a row
+        boot_tvd[b, ok] = 0.5 * np.abs(Cb[ok] / tb[ok, None] - P_rows[ok]).sum(axis=1)
+
+    with np.errstate(all="ignore"):
+        noise[name] = {
+            "median": np.nanmedian(boot_tvd, axis=0),
+            "p95": np.nanpercentile(boot_tvd, 95, axis=0),
+        }
+
+    print(
+        f"{name}: {counts[3]:,} drifters resampled {N_BOOT} times "
+        f"for the {DIRECT_TAU:g}-day rows"
+    )
+
+
+# ── 4. Chapman-Kolmogorov comparison ─────────────────────────────────────────
 cell_rows = []
 summary_rows = []
 
@@ -342,6 +428,12 @@ for name in DROGUE_TYPES:
         )
     )
 
+    # Sampling noise of each direct 2*tau row (section 3).
+    noise_median = noise[name]["median"]
+    noise_p95 = noise[name]["p95"]
+    above_noise = tvd > noise_p95
+    excess = tvd - noise_median
+
     cell_lon, cell_lat = (
         cell_centres(
             op_tau
@@ -432,6 +524,21 @@ for name in DROGUE_TYPES:
     print(
         f"Rows with TVD < 0.50     : "
         f"{share_below_050:.1%}"
+    )
+
+    print(
+        f"Median noise TVD (2*tau) : "
+        f"{np.median(noise_median[common]):.3f}"
+    )
+
+    print(
+        f"Median TVD above noise   : "
+        f"{np.median(excess[common]):.3f}"
+    )
+
+    print(
+        f"Rows above noise (95%)   : "
+        f"{above_noise[common].mean():.1%}"
     )
 
     print(
@@ -529,6 +636,31 @@ for name in DROGUE_TYPES:
 
         "share_tvd_below_0p50":
             share_below_050,
+
+        "median_noise_tvd":
+            float(
+                np.median(
+                    noise_median[
+                        common
+                    ]
+                )
+            ),
+
+        "median_excess_tvd":
+            float(
+                np.median(
+                    excess[
+                        common
+                    ]
+                )
+            ),
+
+        "share_above_noise_p95":
+            float(
+                above_noise[
+                    common
+                ].mean()
+            ),
 
         "median_absdiff_in_R":
             float(
@@ -628,6 +760,27 @@ for name in DROGUE_TYPES:
                     ]
                 ),
 
+            "noise_tvd_median":
+                float(
+                    noise_median[
+                        i
+                    ]
+                ),
+
+            "noise_tvd_p95":
+                float(
+                    noise_p95[
+                        i
+                    ]
+                ),
+
+            "above_noise":
+                bool(
+                    above_noise[
+                        i
+                    ]
+                ),
+
             "in_R_two_step":
                 float(
                     in_R_two_step[
@@ -717,10 +870,13 @@ for name in DROGUE_TYPES:
 
         "common":
             common,
+
+        "noise_p95":
+            noise_p95,
     }
 
 
-# ── 4. Save tables ────────────────────────────────────────────────────────────
+# ── 5. Save tables ────────────────────────────────────────────────────────────
 cell_table = pd.DataFrame(
     cell_rows
 )
@@ -750,7 +906,7 @@ print(
 )
 
 
-# ── 5. TVD maps ───────────────────────────────────────────────────────────────
+# ── 6. TVD maps ───────────────────────────────────────────────────────────────
 all_plot_values = np.concatenate(
     [
         d["tvd"][
@@ -937,7 +1093,47 @@ print(
 )
 
 
-# ── 6. Interpretation reminder ────────────────────────────────────────────────
+# ── 7. TVD against sampling noise ────────────────────────────────────────────
+fig, axes = plt.subplots(
+    1,
+    len(DROGUE_TYPES),
+    figsize=(11, 5),
+    sharex=True,
+    sharey=True,
+)
+
+for ax, name in zip(axes, DROGUE_TYPES):
+    d = plot_data[name]
+    common = d["common"]
+    x = d["noise_p95"][common]
+    y = d["tvd"][common]
+    above = y > x
+
+    ax.scatter(x[~above], y[~above], s=8, alpha=0.5, color="tab:grey", label="within noise")
+    ax.scatter(x[above], y[above], s=8, alpha=0.6, color="tab:red", label="above noise")
+    lim = max(x.max(), y.max()) * 1.05
+    ax.plot([0, lim], [0, lim], color="k", lw=1, ls="--")
+    ax.set_xlim(0, lim)
+    ax.set_ylim(0, lim)
+    ax.set_title(f"{name}: {above.mean():.0%} of {common.sum()} rows above noise")
+    ax.set_xlabel(f"95th percentile bootstrap TVD of the direct {DIRECT_TAU:g}-day row")
+    ax.legend(frameon=False, loc="upper left")
+
+axes[0].set_ylabel(f"TVD: P({TAU:g} d)^2 vs direct P({DIRECT_TAU:g} d)")
+fig.suptitle(f"Chapman-Kolmogorov TVD against sampling noise — {RES:g}°, tau = {TAU:g} d")
+fig.tight_layout()
+
+NOISE_FIGURE_FILE = f"figures/agulhas_chapman_kolmogorov_noise_{TAG}.png"
+plt.savefig(NOISE_FIGURE_FILE, dpi=150, bbox_inches="tight")
+plt.close()
+
+print(
+    f"Figure saved       → "
+    f"{NOISE_FIGURE_FILE}"
+)
+
+
+# ── 8. Interpretation reminder ────────────────────────────────────────────────
 print(
     "\n========================================"
 )
@@ -969,6 +1165,8 @@ print(
 )
 
 print(
-    "This is a descriptive Markov-consistency diagnostic, "
-    "not a formal significance test."
+    "Rows above noise have a TVD larger than the 95th percentile of their "
+    "direct row's bootstrap TVD, so sampling alone is unlikely to explain it. "
+    "The noise level ignores the smaller noise in P(tau)^2 and is not "
+    "corrected for the number of rows tested."
 )
