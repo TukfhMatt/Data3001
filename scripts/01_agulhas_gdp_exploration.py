@@ -12,7 +12,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import box_tag, parse_args
+from config import box_tag, parse_args, region_prefix
 
 args = parse_args(__doc__)
 
@@ -94,7 +94,7 @@ else:
     ax.legend(markerscale=10)
 
 plt.tight_layout()
-out_map = f"figures/agulhas_gdp_coverage_{box_tag(args.box)}.png"
+out_map = f"figures/{region_prefix(args.data)}_gdp_coverage_{box_tag(args.box)}.png"
 plt.savefig(out_map, dpi=150, bbox_inches="tight")
 print(f"\nMap saved → {out_map}")
 plt.close()
@@ -112,7 +112,7 @@ ax.set_xlabel("Year")
 ax.set_ylabel("Observations")
 ax.set_title(f"Temporal Distribution of GDP Drifter Obs in {box_tag(args.box)}")
 plt.tight_layout()
-out_time = f"figures/agulhas_gdp_temporal_{box_tag(args.box)}.png"
+out_time = f"figures/{region_prefix(args.data)}_gdp_temporal_{box_tag(args.box)}.png"
 plt.savefig(out_time, dpi=150, bbox_inches="tight")
 print(f"Temporal plot saved → {out_time}")
 plt.close()

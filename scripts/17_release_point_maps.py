@@ -24,7 +24,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-from config import DROGUE_TYPES, operator_path, parse_args, place_label, release_points_path, setting_tag
+from config import DROGUE_TYPES, operator_path, parse_args, place_label, region_prefix, release_points_path, setting_tag
 from transport import load_operator, release, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -113,8 +113,8 @@ for i, pt in enumerate(points.itertuples(), start=1):
     fig.suptitle(f"Release at {pt.name} ({place_label(pt.lon, pt.lat)}) — {RES:g}°, τ = {TAU:g} d; "
                  f"95% drifter-bootstrap intervals", fontsize=12)
     slug = re.sub(r"[^a-z0-9]+", "_", pt.name.lower()).strip("_")
-    out = f"figures/agulhas_release_{i:02d}_{slug}_{TAG}.png"
+    out = f"figures/{region_prefix(args.data)}_release_{i:02d}_{slug}_{TAG}.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     saved.append(out)
-print(f"\nSaved → {out_csv}\nSaved → {len(saved)} figures, figures/agulhas_release_*_{TAG}.png")
+print(f"\nSaved → {out_csv}\nSaved → {len(saved)} figures, figures/{region_prefix(args.data)}_release_*_{TAG}.png")

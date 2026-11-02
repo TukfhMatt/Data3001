@@ -37,7 +37,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import DROGUE_TYPES, box_tag, grid_shape, parse_args
+from config import DROGUE_TYPES, box_tag, grid_shape, parse_args, region_prefix
 from transport import (EXIT_LABELS, STRANDED, move_indices, row_normalise, same_drogue,
                        strand_times, transition_states)
 
@@ -296,7 +296,7 @@ ax.set_ylabel("Observed share that left")
 ax.set_title("Exit calibration (bins with ≥ 30 test starts)", fontsize=10)
 ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.grid(alpha=0.3); ax.legend(fontsize=8)
 fig.suptitle(f"Held-out validation — {RES:g}° grid, τ = {TAU:g} d, box R", fontsize=12, y=1.04)
-out = f"figures/agulhas_validation_{TAG}.png"
+out = f"figures/{region_prefix(args.data)}_validation_{TAG}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Figure saved → {out}")
 plt.close()

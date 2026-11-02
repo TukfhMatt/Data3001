@@ -1,6 +1,6 @@
 # Data3001 — Agulhas Surface Transport
 
-Something goes into the water in the Agulhas region off South Africa: a container lost from a ship, a life raft, an oil slick. Where has the surface flow taken it after a week, a month, a year? Which parts of the region feed which others, and where does material collect or leave?
+Something goes into the water in the Agulhas region off South Africa: a container lost from a ship or an oil slick. Where has the surface flow taken it after a week, a month, a year? Which parts of the region feed which others, and where does material collect or leave?
 
 This project builds a **surface-transport operator** for that region: a transition matrix, estimated from real ocean drifter tracks, that anyone can load and step forward in time.
 
@@ -32,7 +32,7 @@ The box balances shipping risk against oil retention (scored in `05_box_selectio
   - **Drogued**: a sea anchor at 15 m is attached, so the drifter follows the near-surface current with little wind effect. This is passive water transport (e.g. a submerged container).
   - **Undrogued**: the drogue has been lost, so the drifter rides at the surface and slips downwind by about 10 cm/s (2.0% of the ERA5 10 m wind: eastward under the westerlies, north-westward under the trades). Closest match to oil, but oil drifts at about 3.5% of wind speed, so the oil matrix adds the missing 1.5%.
   - The two are not pooled: an "all drifters" matrix mixes 46–84% undrogued data depending on the cell, so its wind effect would follow sampling history rather than physics.
-- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`08`, `09`). Planned: a life-raft version with its own windage.
+- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`08`, `09`).
 
 ---
 
@@ -96,6 +96,7 @@ python scripts/23_coastal_stranding.py     # split stranding into six named coas
 python scripts/24_traffic_exposure.py      # traffic-weighted exposure by coast and route (needs 21, 23)
 python scripts/25_risk_atlas.py            # release-risk atlas: every cell and horizon with intervals (needs 23)
 python scripts/26_hypothesis_tests.py      # decision rules of H1, H2 and H3 (needs 04 and 10)
+python scripts/27_decorrelation_time.py    # velocity decorrelation time, which sets how short τ can be
 ```
 
 Scripts `01`–`04`, `11`–`17` and `19`–`21` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
@@ -126,7 +127,7 @@ python scripts/00_fetch_agulhas_subset.py --fetch-box -90 -30 15 55 --out data/g
 python scripts/03_transition_matrix.py --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc
 ```
 
-`01`–`04`, `06`, `07` and `10`–`22` run this way, in the order of the list above. `04` picks release points by traffic alone outside R, since its named ports are all in R. `05` searches around the Agulhas core only, and `23`–`25` stop with a message outside the Agulhas area, because the named coasts and routes describe that region. `08` and `09` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, though figure names still start with `agulhas_`.
+`01`–`04`, `06`, `07` and `10`–`22` run this way, in the order of the list above. `04` picks release points by traffic alone outside R, since its named ports are all in R. `05` searches around the Agulhas core only, and `23`–`25` stop with a message outside the Agulhas area, because the named coasts and routes describe that region. `08` and `09` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, and figure names start with the first word of the subset's file name (here `gulfstream_`).
 
 | Script | What it does | Output |
 |---|---|---|
@@ -157,6 +158,7 @@ python scripts/03_transition_matrix.py --box -80 -40 25 45 --data data/gulfstrea
 | `24_traffic_exposure.py` | Spreads releases over R by shipping density, for all traffic and six routes: stranding by coast, days to strand, near-shore days, each route's share of each coast's stranding and oil's mass stranded, with 1,000 resamples of whole drifters; sensitivity runs with lane-pixel weights and without the weight moved off unreliable cells. Needs the shipping zip. | `data/traffic_exposure_…csv`, `data/traffic_nearshore_segments_…csv`, `data/traffic_weights_…csv`, `figures/agulhas_traffic_exposure_…png` |
 | `25_risk_atlas.py` | Release-risk atlas: for every ocean cell, the share afloat in R, exited across each edge and stranded on each coast at 7, 30 and 365 days and eventually, and days to strand, with 95% intervals and each cell's reliability flags | `data/risk_atlas_…csv`, `figures/agulhas_risk_atlas_…png` |
 | `26_hypothesis_tests.py` | Applies the proposal's decision rules: the interval of P(exit E) − P(exit W) over reliable cells (H1), undrogued against drogued stranding in the lane cells (H2) and folds won against persistence and advection from 14 days (H3), with 1,000 resamples of whole drifters | `data/hypothesis_h{1,2,3}_…csv`, `figures/agulhas_hypothesis_tests_…png` |
+| `27_decorrelation_time.py` | Velocity autocorrelation and integral timescale per drogue type (over 10–40°E, 45–25°S in R), with 1,000 resamples of whole drifters | `data/decorrelation_{res}deg_{box}.csv`, `data/decorrelation_curve_…csv`, `figures/agulhas_decorrelation_…png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
 

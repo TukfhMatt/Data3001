@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from config import MIN_DRIFTERS, box_tag, grid_shape, grid_tag, parse_args
+from config import MIN_DRIFTERS, box_tag, grid_shape, grid_tag, parse_args, region_prefix
 
 args = parse_args(__doc__, grid=True, multi=True)
 os.makedirs("figures", exist_ok=True)
@@ -124,7 +124,7 @@ cb = fig.colorbar(mesh, ax=axes, shrink=0.6, extend="min")
 cb.set_label(f"Distinct drifters per cell (grey = fewer than {MIN_DRIFTERS})")
 fig.suptitle(f"Drifter coverage per grid cell — {box_tag(args.box)}", fontsize=13)
 
-out = f"figures/agulhas_grid_coverage_{TAG}.png"
+out = f"figures/{region_prefix(args.data)}_grid_coverage_{TAG}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Map saved → {out}")
 plt.close()

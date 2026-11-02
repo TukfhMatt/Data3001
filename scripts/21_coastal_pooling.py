@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args, region_prefix, setting_tag
 
 from transport import (
     EXIT_LABELS,
@@ -69,7 +69,7 @@ CELL_FILE = f"data/coastal_pooling_cells_{TAG}.csv"
 SEGMENT_FILE = f"data/coastal_pooling_segments_{TAG}.csv"
 SUMMARY_FILE = f"data/coastal_pooling_summary_{TAG}.csv"
 MAPPING_FILE = f"data/coastal_segments_{TAG}.npz"
-FIGURE_FILE = f"figures/agulhas_coastal_pooling_{TAG}.png"
+FIGURE_FILE = f"figures/{region_prefix(args.data)}_coastal_pooling_{TAG}.png"
 os.makedirs("data", exist_ok=True)
 os.makedirs("figures", exist_ok=True)
 print("========================================")

@@ -45,7 +45,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from config import DROGUE_TYPES, grid_shape, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, grid_shape, operator_path, parse_args, region_prefix, setting_tag
 
 from transport import (
     cell_centres,
@@ -71,7 +71,7 @@ SEED = 0
 TAG = setting_tag(RES, TAU, args.box)
 CELL_FILE = f"data/chapman_kolmogorov_cells_{TAG}.csv"
 SUMMARY_FILE = f"data/chapman_kolmogorov_summary_{TAG}.csv"
-FIGURE_FILE = f"figures/agulhas_chapman_kolmogorov_{TAG}.png"
+FIGURE_FILE = f"figures/{region_prefix(args.data)}_chapman_kolmogorov_{TAG}.png"
 os.makedirs("data", exist_ok=True)
 os.makedirs("figures", exist_ok=True)
 print("========================================")
@@ -428,7 +428,7 @@ for ax, name in zip(axes, DROGUE_TYPES):
 axes[0].set_ylabel(f"TVD: P({TAU:g} d)^2 vs direct P({DIRECT_TAU:g} d)")
 fig.suptitle(f"Chapman-Kolmogorov TVD against sampling noise — {RES:g}°, tau = {TAU:g} d")
 fig.tight_layout()
-NOISE_FIGURE_FILE = f"figures/agulhas_chapman_kolmogorov_noise_{TAG}.png"
+NOISE_FIGURE_FILE = f"figures/{region_prefix(args.data)}_chapman_kolmogorov_noise_{TAG}.png"
 plt.savefig(NOISE_FIGURE_FILE, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"Figure saved       → {NOISE_FIGURE_FILE}")

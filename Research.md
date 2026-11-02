@@ -46,7 +46,7 @@ Data:
 
 Method (Ulam's method / transition matrix):
 1. Grid R into cells at 0.5°, 1° and 2°; 1° is the working grid. Land cells are masked.
-2. Transition time τ = 3.5 days, longer than the Lagrangian decorrelation time (integral timescale 1.4 d drogued, 1.2 d undrogued; scripts/25_decorrelation_time.py); drifters move about one cell per step. The Markov approximation is checked separately with a Chapman–Kolmogorov comparison between `P(τ)^2` and transitions estimated directly at `2τ`.
+2. Transition time τ = 3.5 days, longer than the Lagrangian decorrelation time (integral timescale 1.40 d drogued, 95% interval 1.34–1.47, and 1.20 d undrogued, 1.16–1.23, over 10–40°E, 45–25°S; `scripts/27_decorrelation_time.py`); drifters move about one cell per step. The Markov approximation is checked separately with a Chapman–Kolmogorov comparison between `P(τ)^2` and transitions estimated directly at `2τ`.
 3. For every drifter position at time t in cell i, find where it is at t + τ (cell j). Count transitions C[i, j].
 4. Five absorbing states: four "exited R" states (W, E, S, N) record which edge material leaves by, and a "stranded" state records material that runs aground inside R. A drifter strands when GDP records its death as "ran aground" and its last observation lies in R; every position in its final τ moves to the stranded state. A stranding move takes the drogue status of its start, since the drogue flag often flips to undrogued in a record's final hours.
 5. Row-normalise: P[i, j] = C[i, j] / Σ_j C[i, j]. Each row is "where does material in cell i go in τ days". A cell with no outgoing moves of its own (its drifters' records ended there for other reasons, such as failed transmitters) takes the pooled moves of the nearest ring of ocean cells around it.
@@ -246,7 +246,7 @@ Progress:
 - [x] ERA5 winds — `scripts/08_fetch_era5.py`: 10 m wind (0.5°, 6-hourly, 1995–2022) from the Copernicus CDS API, interpolated to 10.03M drifter positions (99.9% of positions in R).
 
 - [x] Oil version — `scripts/09_oil_wind.py` (1°, τ = 3.5 d).
-  - Undrogued windage: 2.0% of the 10 m wind (95% interval 1.81–2.19%, resampling whole drifters over the 746 cells with ≥ 10 drifters of each type), from regressing the per-cell slip (undrogued − drogued velocity) on the ERA5 wind at undrogued positions. The estimate holds without the fast-current cells (2.2%) and east of 35°E (2.1%).
+  - Undrogued windage: 2.0% of the 10 m wind (95% interval 1.81–2.19%, resampling whole drifters over the 746 cells with ≥ 10 drifters of each type), from regressing the per-cell slip (undrogued − drogued velocity) on the ERA5 wind at undrogued positions. The estimate holds without the fast-current cells (2.2% without cells whose mean drogued current exceeds 0.3 m/s, and 2.0–2.3% for cutoffs from 0.2 to 1 m/s) and east of 35°E (2.1%).
   - The oil matrix adds 1.5%: a median shift of 25 km per step (90th percentile 42 km); 0.01% of shifted ends land on land or unvisited cells and keep their drifter end.
   - Share of released parcels stranded within 30 days, with 95% intervals from resampling whole drifters (oil in `09`, undrogued from `06`). "Grounded" is the number of drifters that ran aground starting from the release cell itself; stranding also arrives from neighbouring cells, so a point with none can still strand.
 

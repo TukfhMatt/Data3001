@@ -92,6 +92,12 @@ def setting_tag(res, tau, box):
     return f"{_join(res)}deg_{_join(tau)}d_{box_tag(box)}"
 
 
+def region_prefix(data):
+    """First word of the subset's file name, which starts figure names, e.g.
+    'gulfstream' for data/gulfstream_gdp1h_subset.nc."""
+    return os.path.basename(data).split("_")[0]
+
+
 def place_label(lon, lat):
     """e.g. (-70.5, 35.5) → '70.5°W 35.5°N'."""
     return f"{abs(lon):.1f}°{'W' if lon < 0 else 'E'} {abs(lat):.1f}°{'S' if lat < 0 else 'N'}"

@@ -32,7 +32,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import DROGUE_TYPES, RES, grid_shape, operator_path, parse_args, place_label, setting_tag
+from config import DROGUE_TYPES, RES, grid_shape, operator_path, parse_args, place_label, region_prefix, setting_tag
 from transport import (cell_centres, drifter_counts, load_operator, move_indices, reliable,
                        resampled_counts, row_normalise, same_drogue, strand_times, to_grid,
                        transition_states)
@@ -208,7 +208,7 @@ cb = fig.colorbar(mesh, ax=axes, shrink=0.8)
 cb.set_label("Hotspot frequency (reliable cells)")
 fig.suptitle(f"Retention hotspots after {RETENTION_DAYS} days — {BOOT_RES:g}°, τ = {tau0:g} d, "
              f"{N_BOOT} drifter resamples", fontsize=12)
-out_png = f"figures/agulhas_retention_hotspots_{TAG}.png"
+out_png = f"figures/{region_prefix(args.data)}_retention_hotspots_{TAG}.png"
 plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"\nSaved → {out_summary}\nSaved → {out_pairs}\nSaved → {out_cells}\nSaved → {out_boot}\nSaved → {out_png}")

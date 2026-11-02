@@ -30,7 +30,7 @@ from rasterio.windows import from_bounds
 import xarray as xr
 
 from config import (DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, place_label,
-                    release_points_path, setting_tag)
+                    region_prefix, release_points_path, setting_tag)
 from transport import coastal_states, load_operator, propagate, state_of
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -292,7 +292,7 @@ for dname, (u, v, _) in currents.items():
                  f"Labels: material-days spent in near-shore cells over the first 30 days after release "
                  f"({RES:g}°, τ = {args.tau:g} d)", fontsize=11)
 
-    out = f"figures/agulhas_shipping_currents_{dname}_{setting_tag(RES, args.tau, args.box)}.png"
+    out = f"figures/{region_prefix(args.data)}_shipping_currents_{dname}_{setting_tag(RES, args.tau, args.box)}.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"Map saved → {out}")
     plt.close()

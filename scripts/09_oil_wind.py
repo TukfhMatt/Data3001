@@ -44,7 +44,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, release_points_path, wind_paths
+from config import (MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, region_prefix, release_points_path,
+                    wind_paths)
 from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
                        move_indices, propagate, release, resampled_counts, row_normalise,
                        same_drogue, state_of, strand_times, to_grid, transition_states)
@@ -363,7 +364,7 @@ for ax, (key, op) in zip(axes, ops.items()):
 cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="both")
 cb.set_label("Probability per 1° cell after 30 days (log)")
 fig.suptitle(f"{shown['name']} release after 30 days — undrogued, oil (A) and check (B)", fontsize=12)
-out = f"figures/agulhas_oil_{re.sub(r'[^a-z0-9]+', '_', shown['name'].lower()).strip('_')}_30d_{TAG}.png"
+out = f"figures/{region_prefix(args.data)}_oil_{re.sub(r'[^a-z0-9]+', '_', shown['name'].lower()).strip('_')}_30d_{TAG}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Map saved → {out}")
 plt.close()

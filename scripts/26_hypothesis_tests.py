@@ -28,7 +28,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import DROGUE_TYPES, grid_shape, operator_path, parse_args, release_points_path, setting_tag
+from config import DROGUE_TYPES, grid_shape, operator_path, parse_args, region_prefix, release_points_path, setting_tag
 from transport import (EXIT_LABELS, STRANDED, drifter_counts, load_operator, move_indices, reliable,
                        resampled_counts, row_normalise, same_drogue, state_of, strand_times, stranding_chain,
                        transition_states)
@@ -191,7 +191,7 @@ ax.set_title("H3: above zero, the operator beats mean-current advection", fontsi
 ax.grid(alpha=0.3)
 ax.legend(loc="lower right", fontsize=9)
 fig.suptitle(f"Hypothesis tests — {RES:g}°, τ = {TAU:g} d", fontsize=12)
-out_png = f"figures/agulhas_hypothesis_tests_{TAG}.png"
+out_png = f"figures/{region_prefix(args.data)}_hypothesis_tests_{TAG}.png"
 plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
 
