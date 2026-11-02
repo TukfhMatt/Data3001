@@ -330,11 +330,20 @@ Progress:
   - Near-shore presence over 30 days, all traffic, is highest on the South African south and east coast for drogued, undrogued and oil material (0.83 / 0.63 / 0.68 material-days); per-segment values are in `traffic_nearshore_segments_…csv`.
   - Outputs: `data/traffic_exposure_…csv`, `data/traffic_nearshore_segments_…csv`, `data/traffic_weights_…csv`, `figures/agulhas_traffic_exposure_…png`.
 
-- [x] Release-risk atlas — `scripts/25_risk_atlas.py` (1°, τ = 3.5 d; drogued, undrogued and oil; 1,000 resamples of whole drifters).
+- [x] Release-risk atlas — `scripts/25_risk_atlas.py` (1°, τ = 3.5 d; drogued, undrogued and oil at 3%, 3.5% and 4% of the wind; 1,000 resamples of whole drifters).
   - All 970 ocean cells as release cells: the share afloat in R, exited across each edge and stranded on each coast at 7, 30 and 365 days and eventually, and days to strand, each with a 95% interval and the cell's reliability flags (`flagged`, `empty`, `row_drifters`). Outcomes sum to 1 for every cell and horizon.
   - Stranding from a typical reliable cell is low even after a year (median 0.8% drogued, 3.1% undrogued, 4.0% oil), with a long tail: the top 10% of cells reach 9% / 45% / 56%.
   - The highest-risk cells for oil at 30 days lie on the Mozambique coast at 35–36°E, 19–22°S (78–97%, intervals from 58%) and off north-east Madagascar at 49.5°E, 16.5°S (80%, 55–100%).
-  - Outputs: `data/risk_atlas_…csv` (139,680 rows), `figures/agulhas_risk_atlas_…png`.
+  - Outputs: `data/risk_atlas_…csv` (232,800 rows), `figures/agulhas_risk_atlas_…png`.
+
+- [x] Oil windage range — `scripts/09_oil_wind.py` builds oil (undrogued + the missing windage) and its drogued check at 3%, 3.5% and 4% of the wind; `scripts/28_oil_windage.py` compares them (1°, τ = 3.5 d; 1,000 resamples of whole drifters, the same draws for all three oil matrices). The range adds 1.0–2.0% to undrogued moves (a median shift of 16–33 km per step), which also covers the uncertainty in measured windage (1.81–2.19%).
+  - How much more often, if releases follow ship traffic: undrogued 23% (20–26%) eventually strands; oil 26% (22–29%), 27% (24–30%) and 29% (25–32%) at 3%, 3.5% and 4%. From 3% to 4% adds 2.5 points (1.6–3.1), beyond sampling noise.
+  - How much sooner: 134 days (118–151) undrogued; 98 (89–110), 87 (79–97) and 78 (71–87) for oil. From 3% to 4% is 20 days sooner (17–24). Windage changes timing more than amount: the 3% and 4% intervals overlap on amount but not on timing. Within 30 days, 7% undrogued and 8% / 9% / 10% oil have stranded.
+  - Which coasts change: mainly Mozambique. Southern Mozambique goes from 7.9% undrogued to 9.2% / 9.6% / 10.0% and central and northern Mozambique from 5.7% to 6.9% / 7.5% / 8.2%, while the other four coasts move by 0.2 points or less across 3–4%. The order of the coasts is the same at all three windages.
+  - Which routes respond: east of Madagascar most (40% / 43% / 46%; 3–4% difference 5.7 points, 4.4–6.8), then south of Madagascar (3.4, 2.1–4.4) and the Mozambique Channel (2.9, 1.3–4.6). The Cape routes and Natal do not change in amount beyond noise, though stranding there still comes sooner.
+  - Oil mass stranded within a year with the 14-day decay: 3.3% (2.7–4.0%), 3.6% (2.9–4.3%) and 3.9% (3.2–4.5%), against 2.8% for undrogued material treated the same way.
+  - Method flag (oil against its drogued check, TVD > 0.3 at 30 days): the same 4 of 13 release points at every windage, Cape Town (0.31–0.33), Durban (0.34–0.37), the lane at 40.5°E, 16.5°S (0.41–0.44) and the lane at 45.5°E, 26.5°S (0.31–0.32). Their oil results depend on the method. The flag is saved in `oil_compare_…csv` and at each windage in `oil_windage_method_flags_…csv`.
+  - Outputs: `data/oil_windage_…csv`, `data/oil_windage_difference_…csv`, `data/oil_windage_method_flags_…csv`, `figures/agulhas_oil_windage_…png`.
 
 - [x] Hypothesis tests — `scripts/26_hypothesis_tests.py` (1°, τ = 3.5 d; 1,000 resamples of whole drifters), each hypothesis under its stated decision rule.
   - H1 supported. P(exit E) − P(exit W), eventual fate averaged over reliable cells, is 0.51 (0.45–0.57) drogued and 0.45 (0.41–0.49) undrogued. Cell by cell, east is the clear majority (85% / 88% of cells have an interval above zero), west holds in 12% / 11%, around the Cape and the west coast, and 4% / 2% are unclear.
@@ -362,4 +371,4 @@ Open questions:
 - Drogued stranding rests on the few drifters still drogued when they reached the coast, since 121 of the 139 grounded drifters lost their drogue more than τ before grounding (`22`). The drogued stranding estimate is therefore treated as a lower bound rather than borrowing the undrogued rate.
 - Coastal sparsity is mitigated with short pooled coastal segments, while the main transition matrix remains unchanged and thin segments remain flagged.
 - The annual 1°, τ = 3.5 d operator remains the baseline. Drogued transport shows no seasonality beyond sampling noise and undrogued transport only a small one (permutation test in `19`), so the seasonal operators serve as a sensitivity check.
-- Next: rebuild the oil matrix at 3%, 3.5% and 4% wind, and spill hindcasts.
+- Next: spill hindcasts for the 2000 Treasure and 1983 Castillo de Bellver spills.

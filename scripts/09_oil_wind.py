@@ -15,7 +15,10 @@ the surface differently from 15 m (direct windage, wave-driven Stokes drift
 and wind-driven shear in the top 15 m), so ALPHA_OIL is taken as oil's drift
 relative to the 15 m current.
 
-A check matrix applies the full ALPHA_OIL to drogued transitions instead.
+A check matrix applies the full ALPHA_OIL to drogued transitions instead. Both
+are also built across the range of oil windage in the literature (3–4% of the
+wind), and a release point where oil and its check disagree strongly at 30 days
+is flagged as depending on the method.
 The two should agree where both have enough data; a large disagreement at a
 release point means its oil result rests on the method choice.
 
@@ -44,8 +47,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from config import (MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, region_prefix, release_points_path,
-                    wind_paths)
+from config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_WINDAGE_RANGE, box_tag, grid_shape, operator_path,
+                    parse_args, region_prefix, release_points_path, wind_paths)
 from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
                        move_indices, propagate, release, resampled_counts, row_normalise,
                        same_drogue, state_of, strand_times, to_grid, transition_states)
@@ -54,10 +57,11 @@ args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES, TAU = args.res, args.tau
 WIND_PATH = wind_paths(args.data)[1]     # written by 08
-ALPHA_OIL = 0.035                        # oil drift = surface current + 3.5% of wind
+ALPHA_OIL = OIL_WINDAGE_RANGE["oil"]     # oil drift = surface current + 3.5% of wind
 DECAY_DAYS = 14.0                        # surface oil e-folding time
 HORIZONS = [7, 30, 365]
-DISAGREE_TVD = 0.3                       # A vs B at 30 d above this is flagged
+FAST_CURRENT = 0.3                       # m/s of mean drogued current, for the check of α without fast cells
+EAST_LON = 35.0                          # for the check of α east of the Agulhas Current
 N_BOOT = 1000                            # drifter resamples for α and the oil intervals
 M_PER_DEG_LAT = 110_574.0
 M_PER_DEG_LON_EQ = 111_320.0
@@ -115,15 +119,16 @@ fit_d = dro_g[(n_per[dro_g] >= MIN_DRIFTERS) & (n_per[und_g] >= MIN_DRIFTERS)]
 fit_u = fit_d - 1
 
 
-def fit_alpha(w):
+def fit_alpha(w, keep=None):
     """α from drifter weights w (1 each for the data, bootstrap counts otherwise):
     slip (undrogued − drogued cell mean) regressed through the origin on the
-    wind at the undrogued positions, over the fitting cells."""
+    wind at the undrogued positions, over the fitting cells (or those in keep)."""
     wt = w[traj_pos]
     tot = np.maximum(np.bincount(group, weights=wt, minlength=n_groups), 1e-12)
     mean = {c: np.bincount(group, weights=wt * per[c].values, minlength=n_groups) / tot
             for c in ["u", "v", "wu", "wv"]}
     ok = (tot[fit_d] >= 1) & (tot[fit_u] >= 1)    # a resample can miss every drifter of a cell
+    ok = ok if keep is None else ok & keep
     d, u = fit_d[ok], fit_u[ok]
     su, sv = mean["u"][u] - mean["u"][d], mean["v"][u] - mean["v"][d]
     wu, wv = mean["wu"][u], mean["wv"][u]
@@ -138,6 +143,14 @@ alpha_ci = np.percentile([fit_alpha(np.bincount(rng.integers(len(traj_ids), size
                           for _ in range(N_BOOT)], [2.5, 97.5])
 n_alpha_cells = len(fit_d)
 alpha_extra = ALPHA_OIL - alpha_u
+one = per.groupby(group)[["u", "v"]].mean()      # drifter means per drogue type and cell
+fit_speed = np.hypot(one["u"].reindex(fit_d).values, one["v"].reindex(fit_d).values)
+fit_lon = LON_MIN + ((fit_d // 2) % n_lon + 0.5) * RES
+alpha_slow = fit_alpha(np.ones(len(traj_ids)), fit_speed <= FAST_CURRENT)
+alpha_east = fit_alpha(np.ones(len(traj_ids)), fit_lon >= EAST_LON)
+print(f"Check: without cells of mean drogued current above {FAST_CURRENT:g} m/s α = {100 * alpha_slow:.2f}% "
+      f"({(fit_speed <= FAST_CURRENT).sum()} cells); east of {EAST_LON:g}°E α = {100 * alpha_east:.2f}% "
+      f"({(fit_lon >= EAST_LON).sum()} cells)")
 print(f"Undrogued windage α = {100 * alpha_u:.2f}% of 10 m wind "
       f"(95% over drifters {100 * alpha_ci[0]:.2f}–{100 * alpha_ci[1]:.2f}%, {n_alpha_cells} cells)")
 print(f"Oil windage {100 * ALPHA_OIL:.1f}% → added to undrogued: {100 * alpha_extra:.2f}%, "
@@ -160,7 +173,7 @@ has_wind = np.isfinite(mean_u)
 print(f"Pairs: {len(start):,}; with wind along the path: {has_wind.mean():.1%}")
 
 
-def build(name, drogue_flag, alpha):
+def build(name, drogue_flag, alpha, alpha_oil):
     same = (drogue[start] == drogue_flag) & (drogue[end] == drogue_flag) & has_wind
     s, e = start[same], end[same]
     tau_s = TAU * 86400
@@ -200,7 +213,7 @@ def build(name, drogue_flag, alpha):
         cell_flat=cells, lon_edges=lon_edges, lat_edges=lat_edges,
         res=RES, tau_days=TAU, exit_labels=EXIT_LABELS, box=np.array(args.box),
         drogued=drogue_flag, alpha_added=alpha, alpha_undrogued=alpha_u,
-        alpha_oil=ALPHA_OIL, decay_days=DECAY_DAYS,
+        alpha_oil=alpha_oil, decay_days=DECAY_DAYS,
         years=np.array([years[s].min(), years[s].max()]),
         source="NOAA GDP hourly v2.01 + ERA5 10 m wind (Copernicus CDS)",
     )
@@ -216,15 +229,20 @@ def build(name, drogue_flag, alpha):
     # Moves per (drifter, from, to), with GDP trajectory numbers, for 23
     key = traj_idx[s].astype(np.int64) * n_states**2 + from_state * n_states + to_state
     uniq, n_moves = np.unique(key, return_counts=True)
-    moves = {"traj": uniq // n_states**2, "ft": uniq % n_states**2, "n": n_moves}
-    return out, drifter_counts(traj_idx[s], from_state, to_state, n_states), moves
+    built = {"traj": uniq // n_states**2, "ft": uniq % n_states**2, "n": n_moves}
+    return out, drifter_counts(traj_idx[s], from_state, to_state, n_states), built
 
 
-path_a, counts_a, moves_a = build("oil", False, alpha_extra)
-path_b, _, moves_b = build("oil_check", True, ALPHA_OIL)
+path_a, counts_a, moves_a = build("oil", False, alpha_extra, ALPHA_OIL)
+path_b, _, moves_b = build("oil_check", True, ALPHA_OIL, ALPHA_OIL)
+moves = {"oil": moves_a, "oil_check": moves_b}
+for name, alpha_oil in OIL_WINDAGE_RANGE.items():
+    if name != "oil":
+        moves[name] = build(name, False, alpha_oil - alpha_u, alpha_oil)[2]
+        check = name.replace("oil", "oil_check")
+        moves[check] = build(check, True, alpha_oil, alpha_oil)[2]
 moves_path = f"data/oil_moves_{TAG}.npz"
-np.savez_compressed(moves_path, **{f"oil_{k}": v for k, v in moves_a.items()},
-                    **{f"oil_check_{k}": v for k, v in moves_b.items()},
+np.savez_compressed(moves_path, **{f"{name}_{k}": v for name, m in moves.items() for k, v in m.items()},
                     n_states=len(cells) + len(EXIT_LABELS))
 
 # ── 4. Compare undrogued, oil (A) and check (B) at the release points ────────
@@ -299,6 +317,7 @@ for _, pt in points.iterrows():
     rows.append(row)
 cmp_ = pd.DataFrame(rows)
 cmp_["grounded_drifters_in_cell"] = grounded
+cmp_["method_flag"] = cmp_["tvd_oil_check_30d"] > DISAGREE_TVD
 for j, (metric, col) in enumerate([("stranded_30d", "exit_stranded"), ("inR_365d", "in_R")]):
     cmp_[f"oil_{metric}_lo"], cmp_[f"oil_{metric}_hi"] = oil_lo[j], oil_hi[j]
     if und_ci is not None:
@@ -311,7 +330,7 @@ print(f"\nRelease points — 30-day coastal exposure (material-days) and strandi
 print(f"{'':<28}{'coast 30 d':^24}{'stranded 30 d':^24}{'in R 1 yr':^24}{'exit W 1 yr':^24}{'TVD A–B':^14}")
 print(f"{'':<28}" + f"{'undr':>8}{'oil A':>8}{'chk B':>8}" * 4 + f"{'7 d':>7}{'30 d':>7}")
 for _, r in cmp_.iterrows():
-    flag = "  ⚠" if r.tvd_oil_check_30d > DISAGREE_TVD else ""
+    flag = "  ⚠" if r.method_flag else ""
     print(f"{r['name'][:27]:<28}"
           + "".join(f"{r[f'{k}_coast_30d']:>8.1f}" for k in ops)
           + "".join(f"{100 * r[f'{k}_stranded_30d']:>7.1f}%" for k in ops)
@@ -333,7 +352,7 @@ for _, r in cmp_.iterrows():
           + f"{r.grounded_drifters_in_cell:>9}")
 print(f"\nSurface oil remaining (exp(−t/{DECAY_DAYS:g} d)): "
       + ", ".join(f"{d} d {np.exp(-d / DECAY_DAYS):.1%}" for d in HORIZONS))
-print(f"⚠ = A and B differ by TVD > {DISAGREE_TVD} at 30 d. Saved → data/oil_compare_{TAG}.csv, {moves_path}")
+print(f"⚠ = A and B differ by TVD > {DISAGREE_TVD} at 30 d (method_flag). Saved → data/oil_compare_{TAG}.csv, {moves_path}")
 
 # ── 5. Map: 30-day distribution from Durban for the three matrices ───────────
 try:

@@ -35,7 +35,8 @@ TAG = setting_tag(RES, TAU, args.box)
 N_BOOT = 1000
 SEED = 0
 HORIZONS = [7, 30, 365]
-MATRICES = ["drogued", "undrogued", "oil"]
+FIGURE_MATRICES = ["drogued", "undrogued", "oil"]
+MATRICES = FIGURE_MATRICES + ["oil_3pct", "oil_4pct"]   # oil windage 3.5%, 3% and 4% of the wind
 OUTCOMES = np.r_[["in_R"], EXIT_LABELS[:STRANDED], COAST_LABELS, ["stranded_any"]]
 
 os.makedirs("figures", exist_ok=True)
@@ -135,8 +136,8 @@ except ImportError:
 kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
 any_col = len(OUTCOMES) - 1
 norm = PowerNorm(0.5, vmin=0, vmax=1)
-fig, axes = plt.subplots(len(MATRICES), len(HORIZONS), figsize=(14, 9.5), subplot_kw=map_kw)
-for r, name in enumerate(MATRICES):
+fig, axes = plt.subplots(len(FIGURE_MATRICES), len(HORIZONS), figsize=(14, 9.5), subplot_kw=map_kw)
+for r, name in enumerate(FIGURE_MATRICES):
     op = ops[name]
     for h, days in enumerate(HORIZONS):
         ax = axes[r, h]
