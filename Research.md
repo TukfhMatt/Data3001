@@ -111,7 +111,7 @@ Progress:
   - Cells with ≥ 10 distinct drifters: drogued 52% / 78% / 90%, undrogued 90% / 92% / 93%.
   - Drogued data is thin on the Agulhas Bank shelf, off Namibia and in parts of the Mozambique Channel.
 
-- [x] Region, grid and lag are parameters (`scripts/config.py`, `--box --res --tau --data` on `01`–`04`); matrix file names include res, τ and box.
+- [x] Region, grid and lag are parameters (`scripts/config.py`, `--box --res --tau --data`); matrix file names include res, τ and box. Another region gets its own subset from `00` (see the second-region step below).
 
 - [x] Transition matrices, both drogue types, 0.5° / 1° / 2° — `scripts/03_transition_matrix.py`, helpers in `scripts/transport.py`.
   - Transitions: 1.77M drogued, 4.07M undrogued.
@@ -335,6 +335,22 @@ Progress:
   - Stranding from a typical reliable cell is low even after a year (median 0.8% drogued, 3.1% undrogued, 4.0% oil), with a long tail: the top 10% of cells reach 9% / 45% / 56%.
   - The highest-risk cells for oil at 30 days lie on the Mozambique coast at 35–36°E, 19–22°S (78–97%, intervals from 58%) and off north-east Madagascar at 49.5°E, 16.5°S (80%, 55–100%).
   - Outputs: `data/risk_atlas_…csv` (139,680 rows), `figures/agulhas_risk_atlas_…png`.
+
+- [x] Second region — the core pipeline on the Gulf Stream, box 80–40°W, 25–45°N, to test that region, grid and lag really are inputs. `00 --fetch-box -90 -30 15 55 --out data/gulfstream_gdp1h_subset.nc` saves 23.6M hourly positions from 3,022 drifters (11.8M positions in the box); `01`–`04`, `06`, `07` and `10`–`22` then run with `--box -80 -40 25 45 --data …` and no region-specific code changes. Not run: `05` (searches around the Agulhas core), `08`–`09` (would need ERA5 for this area) and `23`–`25` (the named coasts and routes describe the Agulhas).
+  - Support (1°, drogued / undrogued): 94% / 92% of the 732 ocean cells have ≥ 10 drifters; coastal cells are thin (33% / 26% reliable, against 96% / 95% offshore).
+  - Fates over reliable cells: east 42% / 63%, south 35% / 21%, north 22% / 11%, west 0.2% / 0.4% (the west edge is mostly land), stranded 1.5% / 4.3%. East is the largest fate but a majority only for undrogued material. Stranding rests on 25 / 81 drifters.
+  - Physics matches what is known of the region. One-year retention peaks in the Sargasso Sea (58–61°W, 30–33°N, 76–77% / 70–71%), and 67 of 70 / 67 of 68 hotspot cells hold up in at least half of 1,000 resamples. Undrogued slip is westward under the trades (6.8 cm/s at 25–30°N) and eastward under the westerlies (6.4 cm/s at 40–45°N), the same pattern as R.
+  - Validation: held-out exits at 28 days are 10.1% / 9.8% predicted against 10.8% / 10.5% observed, stranding 0.24% / 0.45% against 0.26% / 0.45%, and the log score beats climatology in all folds. Point accuracy is much weaker than in R. Folds out of 5 won against advection and persistence:
+
+    | Horizon | Drogued vs advection | Drogued vs persistence | Undrogued vs advection | Undrogued vs persistence |
+    |---|---|---|---|---|
+    | 14 d | 0 | 0 | 0 | 1 |
+    | 21 d | 3 | 1 | 4 | 5 |
+    | 28 d | 3 | 2 | 5 | 5 |
+
+    Started from the cell centre, the same information the matrix has, advection loses to the operator in all folds at these horizons. This fits the operator's main strength being calibrated probabilities, not point accuracy.
+  - Chapman–Kolmogorov: 5.1% / 2.1% of rows are above their 95% noise level, so the Markov assumption holds as in R.
+  - Differences from R: long-run results depend on the grid (mean time in the box 608 → 478 → 350 days drogued and 427 → 379 → 305 days undrogued from 0.5° to 1° to 2°, against about 40 days of spread in R), and drogued transport is seasonal beyond sampling noise in 5 of 6 season pairs (undrogued 6 of 6; drogued 0 of 6 in R). The 1° annual baseline chosen for R therefore should not be assumed elsewhere without rechecking.
 
 Open questions:
 - Drogued stranding rests on the few drifters still drogued when they reached the coast, since 121 of the 139 grounded drifters lost their drogue more than τ before grounding (`22`). The drogued stranding estimate is therefore treated as a lower bound rather than borrowing the undrogued rate.
