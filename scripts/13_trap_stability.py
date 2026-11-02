@@ -34,7 +34,8 @@ import xarray as xr
 
 from config import DROGUE_TYPES, RES, grid_shape, operator_path, parse_args, setting_tag
 from transport import (cell_centres, drifter_counts, load_operator, move_indices, reliable,
-                       resampled_counts, row_normalise, strand_times, to_grid, transition_states)
+                       resampled_counts, row_normalise, same_drogue, strand_times, to_grid,
+                       transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -141,7 +142,7 @@ for tau in args.tau:
         op = load_operator(operator_path(name, BOOT_RES, tau, args.box))
         cells, n = op["cell_flat"], len(op["cell_flat"])
         n_states = op["P"].shape[0]
-        same = (drogue[start] == flag) & (drogue[end] == flag)
+        same = same_drogue(drogue, start, end, stranded, flag)
         s, e = start[same], end[same]
         f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box, stranded[same])
         counts = drifter_counts(traj_idx[s], f, to, n_states)

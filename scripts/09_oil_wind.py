@@ -45,8 +45,8 @@ import xarray as xr
 
 from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
 from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
-                       move_indices, propagate, release, resampled_counts, row_normalise, state_of,
-                       strand_times, to_grid, transition_states)
+                       move_indices, propagate, release, resampled_counts, row_normalise,
+                       same_drogue, state_of, strand_times, to_grid, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -177,7 +177,7 @@ def build(name, drogue_flag, alpha):
     from_state, to_state = transition_states(ext_cell, cells, s, n + np.arange(len(s)),
                                              ext_lon, ext_lat, args.box)
     # Stranding moves of this drogue type, unshifted
-    k = (drogue[strand_s] == drogue_flag) & (drogue[strand_e] == drogue_flag)
+    k = same_drogue(drogue, strand_s, strand_e, True, drogue_flag)
     f2, t2 = transition_states(cell_flat, cells, strand_s[k], strand_e[k], lon, lat, args.box,
                                np.ones(k.sum(), bool))
     from_state, to_state = np.r_[from_state, f2], np.r_[to_state, t2]
@@ -211,11 +211,19 @@ def build(name, drogue_flag, alpha):
     print(f"Mean exit prob / step: {P[:n_cells, n_cells:n_cells + STRANDED].sum(axis=1).mean():.1%}; "
           f"stranding {P[:n_cells, n_cells + STRANDED].mean():.2%} ({k.sum():,} stranding moves)")
     print(f"Saved → {out}")
-    return out, drifter_counts(traj_idx[s], from_state, to_state, n_states)
+    # Moves per (drifter, from, to), with GDP trajectory numbers, for 23
+    key = traj_idx[s].astype(np.int64) * n_states**2 + from_state * n_states + to_state
+    uniq, n_moves = np.unique(key, return_counts=True)
+    moves = {"traj": uniq // n_states**2, "ft": uniq % n_states**2, "n": n_moves}
+    return out, drifter_counts(traj_idx[s], from_state, to_state, n_states), moves
 
 
-path_a, counts_a = build("oil", False, alpha_extra)
-path_b, _ = build("oil_check", True, ALPHA_OIL)
+path_a, counts_a, moves_a = build("oil", False, alpha_extra)
+path_b, _, moves_b = build("oil_check", True, ALPHA_OIL)
+moves_path = f"data/oil_moves_{TAG}.npz"
+np.savez_compressed(moves_path, **{f"oil_{k}": v for k, v in moves_a.items()},
+                    **{f"oil_check_{k}": v for k, v in moves_b.items()},
+                    n_states=len(cells) + len(EXIT_LABELS))
 
 # ── 4. Compare undrogued, oil (A) and check (B) at the release points ────────
 ops = {"undrogued": load_operator(operator_path("undrogued", RES, TAU, args.box)),
@@ -323,7 +331,7 @@ for _, r in cmp_.iterrows():
           + f"{r.grounded_drifters_in_cell:>9}")
 print(f"\nSurface oil remaining (exp(−t/{DECAY_DAYS:g} d)): "
       + ", ".join(f"{d} d {np.exp(-d / DECAY_DAYS):.1%}" for d in HORIZONS))
-print(f"⚠ = A and B differ by TVD > {DISAGREE_TVD} at 30 d. Saved → data/oil_compare_{TAG}.csv")
+print(f"⚠ = A and B differ by TVD > {DISAGREE_TVD} at 30 d. Saved → data/oil_compare_{TAG}.csv, {moves_path}")
 
 # ── 5. Map: 30-day distribution from Durban for the three matrices ───────────
 try:

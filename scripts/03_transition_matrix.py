@@ -20,7 +20,7 @@ import xarray as xr
 
 from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args
 from transport import (EXIT_LABELS, STRANDED, move_indices, propagate, release, row_normalise,
-                       strand_times, to_grid, transition_states)
+                       same_drogue, strand_times, to_grid, transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -50,7 +50,7 @@ def build(name, drogue_flag, res, tau, start, end, stranded):
         -1,
     )
 
-    same_type = (drogue[start] == drogue_flag) & (drogue[end] == drogue_flag)
+    same_type = same_drogue(drogue, start, end, stranded, drogue_flag)
     s, e, st = start[same_type], end[same_type], stranded[same_type]
 
     # Ocean cells: any cell in R where a drifter of either type was observed,

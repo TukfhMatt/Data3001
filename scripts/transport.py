@@ -10,7 +10,8 @@ Helpers for using a saved Agulhas transport operator.
 
 States 0..n_cells-1 are ocean grid cells in R; the last five are absorbing,
 in the order of op["exit_labels"]: left R across the W, E, S or N edge, and
-"stranded" (ran aground on a coast inside R).
+"stranded" (ran aground on a coast inside R). The coastal operators from 23
+split "stranded" into one state per named coast (COAST_LABELS).
 
 cell_centres, reliable and absorption serve the whole-box analysis (11–17):
 absorption gives each cell's expected time in R and eventual exit or
@@ -27,6 +28,29 @@ import numpy as np
 EXIT_LABELS = np.array(["W", "E", "S", "N", "stranded"])
 STRANDED = len(EXIT_LABELS) - 1          # offset of the stranded state after the ocean cells
 STRAND_MATCH_S = 86400                   # last subset obs within this of GDP's end date
+
+# Named coasts of the default box R, for operators whose stranded state is
+# split by where drifters ran aground (23). Each has ≥ 13 grounded drifters.
+COAST_LABELS = np.array(["atlantic_cape", "sa_south_east", "mozambique_south",
+                         "mozambique_central_north", "madagascar_west_south", "madagascar_east"])
+COAST_NAMES = np.array(["Atlantic and Cape (Namibia to Cape Agulhas)",
+                        "South African south and east coast",
+                        "Southern Mozambique (to 21°S)",
+                        "Central and northern Mozambique",
+                        "West and south Madagascar",
+                        "East Madagascar"])
+COAST_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+
+
+def coast_of(lon, lat):
+    """Coast index (into COAST_LABELS) of a position on or near the coast of
+    R: mainland west of Cape Agulhas (20°E); mainland south of the
+    Mozambique border (26.9°S); mainland to 21°S; the rest of the mainland;
+    Madagascar (east of 42°E) west of 47°E; Madagascar from 47°E (east coast)."""
+    lon, lat = np.asarray(lon, float), np.asarray(lat, float)
+    mad = lon >= 42.0
+    return np.select([~mad & (lon < 20.0), ~mad & (lat < -26.9), ~mad & (lat < -21.0), ~mad,
+                      mad & (lon < 47.0)], [0, 1, 2, 3, 4], 5)
 
 
 def load_operator(path):
@@ -117,6 +141,33 @@ def absorption(op):
     return X[:, 0], X[:, 1:]
 
 
+def stranding_chain(P, n, strand_from):
+    """Like absorption, for a matrix that may hold closed cells: a bootstrap
+    resample can leave a few thin cells with no way out, and material entering
+    them stays in R. Solves over the states that can reach an absorbing state.
+      fate       — probability of each absorbing state per ocean state (zero
+                   for a closed cell), columns in the order of exit_labels
+      visits     — N·b, where b is the probability of ending in any absorbing
+                   state from column strand_from on (the stranded states). It
+                   sums steps over the paths that strand, so visits / b is the
+                   expected number of steps to strand among material that does."""
+    leaves = P[:n, n:].sum(axis=1) > 0
+    reach = P[:n, :n] > 0
+    while True:
+        grown = leaves | reach[:, leaves].any(axis=1)
+        if (grown == leaves).all():
+            break
+        leaves = grown
+    k = np.where(leaves)[0]
+    A = np.eye(len(k)) - P[np.ix_(k, k)]
+    fate = np.zeros((n, P.shape[0] - n))
+    fate[k] = np.linalg.solve(A, P[k][:, n:])
+    b = fate[:, strand_from:].sum(axis=1)
+    visits = np.zeros(n)
+    visits[k] = np.linalg.solve(A, b[k])
+    return fate, visits
+
+
 # ── Building helpers ─────────────────────────────────────────────────────────
 def last_obs_index(traj_idx):
     """Per obs, the index of its drifter's last observation in the subset."""
@@ -151,6 +202,16 @@ def move_indices(traj_idx, t, in_box, tau_days, strand_t):
     order = np.argsort(np.r_[s1, s2], kind="stable")
     return (np.r_[s1, s2][order], np.r_[e1, e2][order],
             np.r_[np.zeros(len(s1), bool), np.ones(len(s2), bool)][order])
+
+
+def same_drogue(drogue, start, end, stranded, flag):
+    """Moves that count for one drogue type (flag True = drogued). An ordinary
+    move needs that status at both ends. A move into the stranded state needs
+    it at the start only: the flag often flips to undrogued in a record's last
+    hours (16 of 137 drifters that ran aground in R, and as often for those
+    that stopped transmitting; see 22), so the last fix does not show how the drifter
+    reached the coast."""
+    return (drogue[start] == flag) & ((drogue[end] == flag) | stranded)
 
 
 def pair_indices(traj_idx, t, in_box, tau_days):

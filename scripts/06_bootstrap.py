@@ -31,7 +31,8 @@ import xarray as xr
 
 from config import DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
 from transport import (EXIT_LABELS, coastal_states, drifter_counts, load_operator, move_indices,
-                       resampled_counts, row_normalise, state_of, strand_times, transition_states)
+                       resampled_counts, row_normalise, same_drogue, state_of, strand_times,
+                       transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -79,7 +80,7 @@ steps_30 = steps[30]
 # ── 2. Per-drifter transition counts ─────────────────────────────────────────
 def counts_for(flag):
     """Per-drifter move counts for one drogue type (transport.drifter_counts)."""
-    same = (drogue[start] == flag) & (drogue[end] == flag)
+    same = same_drogue(drogue, start, end, stranded, flag)
     s, e = start[same], end[same]
     f, to = transition_states(cell_flat, cells, s, e, lon, lat, args.box, stranded[same])
     return drifter_counts(traj_idx[s], f, to, n_states)

@@ -17,6 +17,10 @@ For each drogue type the script reports:
   - row-wise TVD against the annual operator
   - pairwise TVD between seasons
   - pairwise TVD on cells reliable in all four seasons
+  - a permutation test of the pairwise TVD: season labels are shuffled
+    between blocks (one drifter's moves in one season of one year), so the
+    shuffled TVD is what four matrices of the same sizes differ by through
+    sampling alone
   - 30-day release-point outcomes as a within-season sensitivity test
 
 The 30-day calculation repeatedly applies one seasonal operator and is not a
@@ -50,6 +54,7 @@ from transport import (
     load_operator,
     move_indices,
     row_normalise,
+    same_drogue,
     state_of,
     strand_times,
     transition_states,
@@ -74,6 +79,7 @@ SEASON_NAMES = {
     "SON": "Spring",
 }
 SEASON_LIST = list(SEASONS)
+N_PERM = 200
 
 os.makedirs("data", exist_ok=True)
 os.makedirs("figures", exist_ok=True)
@@ -192,10 +198,7 @@ def build_seasonal(name, drogue_flag, season):
     season_mask = np.isin(start_month, SEASONS[season])
 
     # Same drogue-type rule as script 03.
-    same_type = (
-        (drogue[start] == drogue_flag)
-        & (drogue[end] == drogue_flag)
-    )
+    same_type = same_drogue(drogue, start, end, stranded, drogue_flag)
 
     use = season_mask & same_type
     s, e, st = start[use], end[use], stranded[use]
@@ -463,7 +466,102 @@ pair_file = f"data/seasonal_pairwise_tvd_{TAG}.csv"
 pair_table.to_csv(pair_file, index=False)
 
 
-# ── 7. 30-day release-point seasonal sensitivity ─────────────────────────────
+# ── 7. Permutation test of seasonal differences ──────────────────────────────
+# Without seasonality, a block (one drifter's moves in one season of one year)
+# is equally likely to carry any season label. Shuffling the labels of whole
+# blocks keeps each block's moves and their correlation together, so the
+# shuffled pairwise TVD is the TVD that sampling alone produces.
+season_index = np.zeros(13, int)
+for k, season in enumerate(SEASON_LIST):
+    season_index[SEASONS[season]] = k
+
+move_season = season_index[start_month]
+season_year = years[start] + (start_month == 12)      # December joins the next DJF
+block_key = (traj_idx[start].astype(np.int64) * 10000 + season_year) * 4 + move_season
+block_ids, block_of_move = np.unique(block_key, return_inverse=True)
+block_season = (block_ids % 4).astype(int)
+season_pairs = [
+    (i, j) for i in range(len(SEASON_LIST)) for j in range(i + 1, len(SEASON_LIST))
+]
+
+rng = np.random.default_rng(0)
+perm_rows = []
+perm_plot = {}
+
+print("\n========================================")
+print(f"PERMUTATION TEST ({N_PERM} shuffles of {len(block_ids):,} season blocks)")
+print("========================================")
+
+for name, flag in DROGUE_TYPES.items():
+    keep = same_drogue(drogue, start, end, stranded, flag)
+    f, to = transition_states(
+        cell_flat, cells, start[keep], end[keep], lon, lat, args.box, stranded[keep]
+    )
+
+    # Moves grouped into (block, from, to) triples, so a shuffle only relabels blocks
+    key = (
+        block_of_move[keep].astype(np.int64) * n_states**2
+        + f.astype(np.int64) * n_states
+        + to
+    )
+    uniq, n_moves = np.unique(key, return_counts=True)
+    trip_block = uniq // n_states**2
+    trip_ft = uniq % n_states**2
+    ocean = trip_ft // n_states < n_cells
+
+    # Cells compared for each pair: reliable in both seasons of the observed data
+    seasonal_reliable = [
+        ~seasonal_ops[(season, name)]["flagged"].astype(bool)
+        & ~seasonal_ops[(season, name)]["empty"].astype(bool)
+        for season in SEASON_LIST
+    ]
+    pair_masks = [seasonal_reliable[i] & seasonal_reliable[j] for i, j in season_pairs]
+
+    def pair_medians(labels):
+        """Median row TVD per season pair, with block b given season labels[b]."""
+        season_of_trip = labels[trip_block]
+        rows = []
+        for k in range(len(SEASON_LIST)):
+            m = ocean & (season_of_trip == k)
+            C = np.bincount(
+                trip_ft[m], weights=n_moves[m], minlength=n_states**2
+            ).reshape(n_states, n_states)[:n_cells]
+            rows.append((C / np.maximum(C.sum(axis=1), 1)[:, None], C.sum(axis=1) > 0))
+        out = []
+        for (i, j), mask in zip(season_pairs, pair_masks):
+            ok = mask & rows[i][1] & rows[j][1]      # a shuffle can empty a row
+            out.append(np.median(0.5 * np.abs(rows[i][0][ok] - rows[j][0][ok]).sum(axis=1)))
+        return np.array(out)
+
+    observed = pair_medians(block_season)
+    null = np.array([pair_medians(rng.permutation(block_season)) for _ in range(N_PERM)])
+    perm_plot[name] = (observed, null)
+
+    print(f"\n{name}:")
+    for p, (i, j) in enumerate(season_pairs):
+        p_value = (1 + np.sum(null[:, p] >= observed[p])) / (1 + N_PERM)
+        perm_rows.append({
+            "drogue": name,
+            "season_1": SEASON_LIST[i],
+            "season_2": SEASON_LIST[j],
+            "cells": int(pair_masks[p].sum()),
+            "observed_median_tvd": float(observed[p]),
+            "null_median_tvd": float(np.median(null[:, p])),
+            "null_p95_tvd": float(np.percentile(null[:, p], 95)),
+            "p_value": float(p_value),
+        })
+        print(
+            f"  {SEASON_LIST[i]} vs {SEASON_LIST[j]}: n={pair_masks[p].sum():4d} | "
+            f"observed {observed[p]:.3f} | shuffled {np.median(null[:, p]):.3f} "
+            f"(95th pct {np.percentile(null[:, p], 95):.3f}) | p = {p_value:.3f}"
+        )
+
+perm_table = pd.DataFrame(perm_rows)
+perm_file = f"data/seasonal_permutation_{TAG}.csv"
+perm_table.to_csv(perm_file, index=False)
+
+
+# ── 8. 30-day release-point seasonal sensitivity ─────────────────────────────
 release_file = f"data/seasonal_release_30d_{TAG}.csv"
 release_rows = []
 release_path = "data/release_candidates.csv"
@@ -524,8 +622,8 @@ if os.path.exists(release_path):
     pd.DataFrame(release_rows).to_csv(release_file, index=False)
 
 
-# ── 8. Summary figure ────────────────────────────────────────────────────────
-fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+# ── 9. Summary figure ────────────────────────────────────────────────────────
+fig, axes = plt.subplots(1, 3, figsize=(19, 5))
 x = np.arange(len(SEASON_LIST))
 width = 0.35
 
@@ -575,6 +673,24 @@ axes[1].set_ylabel("Median row TVD vs annual matrix")
 axes[1].set_title("Seasonal change in transport")
 axes[1].legend()
 
+pair_labels = [f"{SEASON_LIST[i]}–{SEASON_LIST[j]}" for i, j in season_pairs]
+x_pairs = np.arange(len(season_pairs))
+for offset, (name, colour) in enumerate(zip(DROGUE_TYPES, ["tab:blue", "tab:orange"])):
+    observed, null = perm_plot[name]
+    xs = x_pairs + (offset - 0.5) * width
+    axes[2].vlines(
+        xs, np.percentile(null, 2.5, axis=0), np.percentile(null, 97.5, axis=0),
+        color=colour, alpha=0.4, lw=6,
+        label=f"{name}: shuffled (95% range)",
+    )
+    axes[2].scatter(xs, observed, color=colour, edgecolor="k", zorder=3, label=f"{name}: observed")
+
+axes[2].set_xticks(x_pairs)
+axes[2].set_xticklabels(pair_labels)
+axes[2].set_ylabel("Median row TVD between seasons")
+axes[2].set_title("Seasonal differences against shuffled seasons")
+axes[2].legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=2, frameon=False)
+
 fig.suptitle(
     f"Agulhas seasonal transport — {RES:g}°, τ = {TAU:g} d"
 )
@@ -585,13 +701,14 @@ plt.savefig(figure_file, dpi=150, bbox_inches="tight")
 plt.close()
 
 
-# ── 9. Done ──────────────────────────────────────────────────────────────────
+# ── 10. Done ─────────────────────────────────────────────────────────────────
 print("\n========================================")
 print("DONE")
 print("========================================")
 print(f"Support     → {support_file}")
 print(f"Cell TVD    → {cell_file}")
 print(f"Pairwise    → {pair_file}")
+print(f"Permutation → {perm_file}")
 
 if release_rows:
     print(f"30-day fate → {release_file}")
