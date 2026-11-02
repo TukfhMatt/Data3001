@@ -29,7 +29,7 @@ args = parse_args(__doc__, grid=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES = args.res
 N_BOOT = 500
-BANDS = [(-45, -40), (-40, -35), (-35, -30), (-30, -25), (-25, -20), (-20, -15)]
+BANDS = [(lo, min(lo + 5.0, LAT_MAX)) for lo in np.arange(LAT_MIN, LAT_MAX, 5.0)]
 rng = np.random.default_rng(0)
 
 # ── 1. Load subset ───────────────────────────────────────────────────────────
@@ -108,13 +108,17 @@ for _ in range(N_BOOT):
 boot = np.array(boot)
 lo_ci, hi_ci = np.nanpercentile(boot, [2.5, 97.5], axis=0)
 
+def band_label(lo, hi):
+    return f"{-hi:g}–{-lo:g}°S" if hi <= 0 else f"{lo:g}–{hi:g}°N" if lo >= 0 else f"{lo:g}–{hi:g}°"
+
+
 print("\nMean slip by latitude band (undrogued − drogued), cm/s, 95% interval over drifters:")
 print(f"{'Band':<12}{'cells':>6}{'east':>22}{'north':>22}{'speed':>8}{'toward':>9}")
 bands = []
 for k, (lo, hi) in enumerate(BANDS):
     su, sv, n = est[k]
     toward = (np.degrees(np.arctan2(su, sv)) + 360) % 360  # compass bearing the slip points to
-    print(f"{abs(hi)}–{abs(lo)}°S{'':<4}{int(n):>6}"
+    print(f"{band_label(lo, hi):<12}{int(n):>6}"
           f"{100 * su:>7.1f} ({100 * lo_ci[k, 0]:>5.1f}, {100 * hi_ci[k, 0]:>5.1f})"
           f"{100 * sv:>7.1f} ({100 * lo_ci[k, 1]:>5.1f}, {100 * hi_ci[k, 1]:>5.1f})"
           f"{100 * np.hypot(su, sv):>8.1f}{toward:>8.0f}°")

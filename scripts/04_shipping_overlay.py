@@ -9,7 +9,7 @@ carries to near-shore cells. Grid, lag and box come from scripts/config.py.
 Shipping data: "Global Shipping Traffic Density", World Bank Data Catalog,
 dataset 0037580, CC-BY 4.0. Described as counts of AIS positions per 0.005°
 cell, but the stored values are far larger than raw position counts could be
-(open-ocean pixels ~1e5–1e6), so they are treated as a relative density only.
+(lane pixels ~1e4–1e7), so they are treated as a relative density only.
 
 Candidates are only placed in cells that are reliable in both matrices (≥ 10
 distinct drifters, has outgoing data), so the two versions are compared at
@@ -29,7 +29,8 @@ import rasterio
 from rasterio.windows import from_bounds
 import xarray as xr
 
-from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args
+from config import (DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, place_label,
+                    release_points_path, setting_tag)
 from transport import coastal_states, load_operator, propagate, state_of
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -41,12 +42,12 @@ LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES = args.res       # analysis grid (matches the transition matrix)
 FINE = 0.1           # display grid for the shipping map
 MIN_CURRENT_OBS = 300  # cells with fewer hourly obs of a drogue type get no current arrow
-RES_TAG = f"{RES:g}".replace(".", "p")
 
 N_TRAFFIC = 8        # busiest-cell candidates to pick
 MIN_SPACING = 2.0    # degrees between chosen candidates
 
-# Known hotspots: offshore of each port / anchorage (lon, lat)
+# Known hotspots: offshore of each port / anchorage (lon, lat). Those outside
+# the box are skipped, so another region is picked by traffic alone.
 HOTSPOTS = {
     "Richards Bay":           (32.6, -28.9),
     "Durban":                 (31.4, -30.0),
@@ -156,6 +157,8 @@ print(f"\nHotspots moved to the nearest cell reliable in both matrices "
       f"(≥ {MIN_DRIFTERS} drifters, has outgoing data):")
 candidates = []
 for name, (lo, la) in HOTSPOTS.items():
+    if not (LON_MIN <= lo < LON_MAX and LAT_MIN <= la < LAT_MAX):
+        continue
     j, i = int((la - LAT_MIN) // RES), int((lo - LON_MIN) // RES)
     if reliable_grid[j, i]:
         clo, cla = CELL_LON[i], CELL_LAT[j]
@@ -172,7 +175,7 @@ for flat in np.argsort(traffic)[::-1]:
     j, i = divmod(flat, n_lon)
     clo, cla = CELL_LON[i], CELL_LAT[j]
     if all(max(abs(clo - c[2]), abs(cla - c[3])) >= MIN_SPACING for c in candidates):
-        candidates.append(("traffic", f"Lane {clo:.1f}°E {abs(cla):.1f}°S", clo, cla))
+        candidates.append(("traffic", f"Lane {place_label(clo, cla)}", clo, cla))
 
 
 def fate(o, s):
@@ -207,7 +210,8 @@ for kind, name, lo, la in candidates:
     rows.append(row)
 
 table = pd.DataFrame(rows).sort_values("drogued_coastal_exposure_days_30d", ascending=False)
-table.to_csv("data/release_candidates.csv", index=False)
+points_out = release_points_path(args.box, RES, args.tau)
+table.to_csv(points_out, index=False)
 
 print(f"\nCandidate release points ({RES:g}°, τ = {args.tau:g} d), ranked by drogued coastal exposure")
 print("ship = density relative to the busiest cell in R; coastal = ocean cells next to land;")
@@ -220,9 +224,9 @@ print(show.to_string(index=False, formatters={
     "ship": "{:.0%}".format,
     "exp_30d_dro": "{:.1f}".format, "exp_30d_und": "{:.1f}".format,
     "inR_365d_dro": "{:.0%}".format, "inR_365d_und": "{:.0%}".format}))
-print("\nTable saved → data/release_candidates.csv")
+print(f"\nTable saved → {points_out}")
 
-ship_out = f"data/shipping_{RES_TAG}deg.npz"
+ship_out = f"data/shipping_{setting_tag(RES, args.tau, args.box)}.npz"
 np.savez_compressed(ship_out, ship=ship_grid, ship_fine=ship_fine,
                     **{f"{k}_{d}": a for d, c in currents.items()
                        for k, a in zip(("u", "v", "current_obs"), c)},
@@ -284,11 +288,11 @@ for dname, (u, v, _) in currents.items():
     cb = fig.colorbar(mesh, ax=ax, shrink=0.7, pad=0.02, extend="both")
     cb.set_label("Commercial ship density relative to busiest 0.1° cell, AIS 2015–2021 (log)")
     ax.legend(loc="lower left", fontsize=9)
-    ax.set_title(f"Commercial shipping and mean current ({LABELS[dname]}) — Agulhas box R\n"
+    ax.set_title(f"Commercial shipping and mean current ({LABELS[dname]}) — {box_tag(args.box)}\n"
                  f"Labels: material-days spent in near-shore cells over the first 30 days after release "
                  f"({RES:g}°, τ = {args.tau:g} d)", fontsize=11)
 
-    out = f"figures/agulhas_shipping_currents_{dname}.png"
+    out = f"figures/agulhas_shipping_currents_{dname}_{setting_tag(RES, args.tau, args.box)}.png"
     plt.savefig(out, dpi=150, bbox_inches="tight")
     print(f"Map saved → {out}")
     plt.close()

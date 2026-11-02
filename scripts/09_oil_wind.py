@@ -34,6 +34,7 @@ rests on far fewer drifters than the row's drifter count.
 """
 
 import os
+import re
 
 import numpy as np
 import pandas as pd
@@ -43,7 +44,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
+from config import MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, release_points_path, wind_paths
 from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
                        move_indices, propagate, release, resampled_counts, row_normalise,
                        same_drogue, state_of, strand_times, to_grid, transition_states)
@@ -51,7 +52,7 @@ from transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, lo
 args = parse_args(__doc__, grid=True, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES, TAU = args.res, args.tau
-WIND_PATH = "data/drifter_wind10m.nc"   # written by 08
+WIND_PATH = wind_paths(args.data)[1]     # written by 08
 ALPHA_OIL = 0.035                        # oil drift = surface current + 3.5% of wind
 DECAY_DAYS = 14.0                        # surface oil e-folding time
 HORIZONS = [7, 30, 365]
@@ -232,7 +233,7 @@ n_cells = len(cells)
 n_states = n_cells + len(EXIT_LABELS)
 exit_col = {lab: n_cells + k for k, lab in enumerate(ops["oil"]["exit_labels"])}
 coast = coastal_states(ops["oil"])
-points = pd.read_csv("data/release_candidates.csv")[["name", "lon", "lat"]]
+points = pd.read_csv(release_points_path(args.box))[["name", "lon", "lat"]]
 steps = {d: int(round(d / TAU)) for d in HORIZONS}
 release_states = np.array([state_of(ops["oil"], r.lon, r.lat) for r in points.itertuples()])
 
@@ -342,16 +343,17 @@ except ImportError:
     ccrs = None
     subplot_kw = {}
 kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
-durban = points[points["name"] == "Durban"].iloc[0]
+shown = points[points["name"] == "Durban"]   # the first release point in a box without Durban
+shown = (shown if len(shown) else points).iloc[0]
 titles = {"undrogued": f"Undrogued ({100 * alpha_u:.1f}% wind, measured)", "oil": f"Oil A: undrogued + {100 * alpha_extra:.1f}% wind",
           "oil_check": f"Check B: drogued + {100 * ALPHA_OIL:.1f}% wind"}
 fig, axes = plt.subplots(1, 3, figsize=(18, 4.3), subplot_kw=subplot_kw)
 for ax, (key, op) in zip(axes, ops.items()):
-    p = propagate(op, release(op, durban.lon, durban.lat), days=30)
+    p = propagate(op, release(op, shown.lon, shown.lat), days=30)
     grid = to_grid(op, p)
     mesh = ax.pcolormesh(lon_edges, lat_edges, np.where(grid > 0, grid, np.nan), cmap="Blues",
                          norm=LogNorm(1e-4, 1e-1), **kw)
-    ax.plot(durban.lon, durban.lat, marker="*", ms=12, color="#e8710a", mec="#222222", **kw)
+    ax.plot(shown.lon, shown.lat, marker="*", ms=12, color="#e8710a", mec="#222222", **kw)
     if ccrs:
         ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
         ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
@@ -360,8 +362,8 @@ for ax, (key, op) in zip(axes, ops.items()):
                  fontsize=10)
 cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="both")
 cb.set_label("Probability per 1° cell after 30 days (log)")
-fig.suptitle("Durban release after 30 days — undrogued, oil (A) and check (B)", fontsize=12)
-out = f"figures/agulhas_oil_durban_30d_{TAG}.png"
+fig.suptitle(f"{shown['name']} release after 30 days — undrogued, oil (A) and check (B)", fontsize=12)
+out = f"figures/agulhas_oil_{re.sub(r'[^a-z0-9]+', '_', shown['name'].lower()).strip('_')}_30d_{TAG}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Map saved → {out}")
 plt.close()

@@ -33,6 +33,7 @@ STRAND_MATCH_S = 86400                   # last subset obs within this of GDP's 
 # split by where drifters ran aground (23). Each has ≥ 13 grounded drifters.
 COAST_LABELS = np.array(["atlantic_cape", "sa_south_east", "mozambique_south",
                          "mozambique_central_north", "madagascar_west_south", "madagascar_east"])
+COAST_AREA = (0.0, 60.0, -55.0, -10.0)   # lon_min, lon_max, lat_min, lat_max
 COAST_NAMES = np.array(["Atlantic and Cape (Namibia to Cape Agulhas)",
                         "South African south and east coast",
                         "Southern Mozambique (to 21°S)",
@@ -40,6 +41,14 @@ COAST_NAMES = np.array(["Atlantic and Cape (Namibia to Cape Agulhas)",
                         "West and south Madagascar",
                         "East Madagascar"])
 COAST_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"]
+
+
+def check_coast_box(box):
+    """Stop if the box is outside the Agulhas area that the named coasts of
+    coast_of (and the routes of 24) describe."""
+    if box[0] < COAST_AREA[0] or box[1] > COAST_AREA[1] or box[2] < COAST_AREA[2] or box[3] > COAST_AREA[3]:
+        raise SystemExit(f"Box {list(box)} is outside {COAST_AREA}: the named coasts and routes only "
+                         "describe the Agulhas region, so this step does not apply to it.")
 
 
 def coast_of(lon, lat):
@@ -208,7 +217,7 @@ def same_drogue(drogue, start, end, stranded, flag):
     """Moves that count for one drogue type (flag True = drogued). An ordinary
     move needs that status at both ends. A move into the stranded state needs
     it at the start only: the flag often flips to undrogued in a record's last
-    hours (16 of 137 drifters that ran aground in R, and as often for those
+    hours (16 of 139 drifters that ran aground in R, and as often for those
     that stopped transmitting; see 22), so the last fix does not show how the drifter
     reached the coast."""
     return (drogue[start] == flag) & ((drogue[end] == flag) | stranded)

@@ -6,10 +6,12 @@ run on another box, grid or lag needs no code change, e.g.
     .venv/bin/python scripts/03_transition_matrix.py --box 10 55 -41 -15 --res 1 --tau 5
 
 Defaults are the current analysis settings. The box must lie inside the area
-fetched by 00 (5°W–65°E, 60–5°S), with some margin for exits.
+fetched by 00 (by default 5°W–65°E, 60–5°S), with some margin for exits; a box
+elsewhere needs its own subset from 00, passed with --data.
 """
 
 import argparse
+import os
 
 import numpy as np
 
@@ -35,7 +37,23 @@ def parse_args(doc, grid=False, lag=False, multi=False):
     if lag:
         p.add_argument("--tau", type=float, nargs="+" if multi else None,
                        default=[TAU_DAYS] if multi else TAU_DAYS, help="lag in days")
-    return p.parse_args()
+    args = p.parse_args()
+    check_box_in_subset(args.box, args.data)
+    return args
+
+
+def check_box_in_subset(box, data):
+    """Stop if the box is outside the area the subset was fetched for, which
+    would otherwise give empty or partial matrices without an error."""
+    if not os.path.exists(data):
+        return
+    import xarray as xr
+    with xr.open_dataset(data) as ds:
+        lon_min, lon_max = map(float, ds.attrs["lon_range"].split(".."))
+        lat_min, lat_max = map(float, ds.attrs["lat_range"].split(".."))
+    if box[0] < lon_min or box[1] > lon_max or box[2] < lat_min or box[3] > lat_max:
+        raise SystemExit(f"Box {list(box)} is outside {data} (lon {lon_min:g} to {lon_max:g}, "
+                         f"lat {lat_min:g} to {lat_max:g}). Fetch it with 00 and pass that file with --data.")
 
 
 def grid_shape(box, res):
@@ -57,14 +75,45 @@ def box_tag(box):
     return f"{lo(box[0])}-{lo(box[1])}_{la(box[2])}-{la(box[3])}"
 
 
+def _join(xs):
+    return "-".join(_tag(x) for x in np.atleast_1d(xs))
+
+
+def grid_tag(res, box):
+    """File tag for a step that depends on the grid but not the lag, e.g.
+    '0p5-1-2deg_10E-55E_45S-15S'."""
+    return f"{_join(res)}deg_{box_tag(box)}"
+
+
 def setting_tag(res, tau, box):
     """File tag for one or several grids and lags, so outputs of different
     settings never overwrite each other, e.g. '1deg_3p5d_10E-55E_45S-15S' or
     '0p5-1-2deg_3p5d_10E-55E_45S-15S'."""
-    join = lambda xs: "-".join(_tag(x) for x in np.atleast_1d(xs))
-    return f"{join(res)}deg_{join(tau)}d_{box_tag(box)}"
+    return f"{_join(res)}deg_{_join(tau)}d_{box_tag(box)}"
+
+
+def place_label(lon, lat):
+    """e.g. (-70.5, 35.5) → '70.5°W 35.5°N'."""
+    return f"{abs(lon):.1f}°{'W' if lon < 0 else 'E'} {abs(lat):.1f}°{'S' if lat < 0 else 'N'}"
+
+
+def wind_paths(data):
+    """Per-year folder and combined file of ERA5 wind at a subset's positions
+    (08), so each subset keeps its own."""
+    if data == GDP_LOCAL:
+        return "data/era5", "data/drifter_wind10m.nc"
+    stem = os.path.splitext(os.path.basename(data))[0]
+    return f"data/era5_{stem}", f"data/drifter_wind10m_{stem}.nc"
 
 
 def operator_path(name, res, tau, box):
     """Saved transition matrix for one drogue type, grid, lag and region."""
     return f"data/P_{name}_{_tag(res)}deg_{_tag(tau)}d_{box_tag(box)}.npz"
+
+
+def release_points_path(box, res=RES, tau=TAU_DAYS):
+    """Candidate release points from 04, by the box, grid and lag they were
+    picked on. Later steps read their box's points picked at the default grid
+    and lag, whatever grid and lag they run on, so results at different
+    settings compare the same points."""
+    return f"data/release_candidates_{setting_tag(res, tau, box)}.csv"

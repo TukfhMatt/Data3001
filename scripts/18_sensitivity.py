@@ -31,7 +31,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from config import DROGUE_TYPES, RES, TAU_DAYS, box_tag, operator_path, parse_args
+from config import DROGUE_TYPES, RES, TAU_DAYS, box_tag, operator_path, parse_args, release_points_path
 from transport import load_operator, state_of
 
 args = parse_args(__doc__)
@@ -79,7 +79,7 @@ for res, tau in SETTINGS:
 skill = pd.DataFrame(skill_rows)
 
 # ── 2. Release fates for every setting ───────────────────────────────────────
-points = pd.read_csv("data/release_candidates.csv")
+points = pd.read_csv(release_points_path(args.box))
 boot = pd.read_csv(f"data/bootstrap_release_{tag(*REFERENCE)}.csv")
 
 

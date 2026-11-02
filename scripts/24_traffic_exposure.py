@@ -46,11 +46,12 @@ import rasterio
 from rasterio.windows import from_bounds
 
 from config import grid_shape, operator_path, parse_args, setting_tag
-from transport import (COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, cell_centres, coast_of,
+from transport import (COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, cell_centres, check_coast_box, coast_of,
                        load_operator, reliable, resampled_counts, row_normalise, stranding_chain,
                        to_grid)
 
 args = parse_args(__doc__, grid=True, lag=True)
+check_coast_box(args.box)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES, TAU = args.res, args.tau
 TAG = setting_tag(RES, TAU, args.box)

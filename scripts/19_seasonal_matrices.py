@@ -42,9 +42,11 @@ import xarray as xr
 from config import (
     DROGUE_TYPES,
     MIN_DRIFTERS,
+    box_tag,
     grid_shape,
     operator_path,
     parse_args,
+    release_points_path,
     setting_tag,
 )
 from transport import (
@@ -564,7 +566,7 @@ perm_table.to_csv(perm_file, index=False)
 # ── 8. 30-day release-point seasonal sensitivity ─────────────────────────────
 release_file = f"data/seasonal_release_30d_{TAG}.csv"
 release_rows = []
-release_path = "data/release_candidates.csv"
+release_path = release_points_path(args.box)
 
 if os.path.exists(release_path):
     points = pd.read_csv(release_path)
@@ -620,6 +622,8 @@ if os.path.exists(release_path):
                 release_rows.append(row)
 
     pd.DataFrame(release_rows).to_csv(release_file, index=False)
+else:
+    print(f"\n{release_path} not found: skipping the release-point scenario (run 04).")
 
 
 # ── 9. Summary figure ────────────────────────────────────────────────────────
@@ -692,7 +696,7 @@ axes[2].set_title("Seasonal differences against shuffled seasons")
 axes[2].legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=2, frameon=False)
 
 fig.suptitle(
-    f"Agulhas seasonal transport — {RES:g}°, τ = {TAU:g} d"
+    f"Seasonal transport — {box_tag(args.box)}, {RES:g}°, τ = {TAU:g} d"
 )
 fig.tight_layout()
 

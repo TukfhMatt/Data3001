@@ -32,7 +32,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import DROGUE_TYPES, RES, grid_shape, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, RES, grid_shape, operator_path, parse_args, place_label, setting_tag
 from transport import (cell_centres, drifter_counts, load_operator, move_indices, reliable,
                        resampled_counts, row_normalise, same_drogue, strand_times, to_grid,
                        transition_states)
@@ -99,7 +99,7 @@ print(f"Retention after {RETENTION_DAYS} days; hotspots = top {HOTSPOT_SHARE:.0%
 print(f"{'grid':>5} {'τ':>4} {'type':<10}{'reliable':>9}{'median':>8}{'threshold':>10}{'hotspot centre':>18}")
 for r in summary.itertuples():
     print(f"{r.res:>4g}° {r.tau:>4g} {r.drogue:<10}{r.reliable_cells:>9}{r.median_retention:>8.1%}"
-          f"{r.hotspot_threshold:>10.1%}{r.hotspot_lon:>9.1f}°E {-r.hotspot_lat:.1f}°S")
+          f"{r.hotspot_threshold:>10.1%}{place_label(r.hotspot_lon, r.hotspot_lat):>18}")
 
 # ── 2. Hotspot agreement across grids ────────────────────────────────────────
 pairs = []
@@ -172,7 +172,7 @@ for tau in args.tau:
               f"other cells a hotspot in ≥ 50%: {(freq[ok & ~hot] >= 0.5).sum()}")
         print(f"  {'cell':>15}{'drifters':>10}{'retention (95%)':>22}{'hotspot freq':>14}")
         for k in np.argsort(-score * ok)[:8]:
-            print(f"  {clon[k]:>6.1f}°E {-clat[k]:>4.1f}°S{op['row_drifters'][k]:>10}"
+            print(f"  {place_label(clon[k], clat[k]):>15}{op['row_drifters'][k]:>10}"
                   f"{score[k]:>9.0%} ({lo[k]:.0%}–{hi[k]:.0%}){freq[k]:>14.0%}")
 
 # ── 4. Save and map hotspot frequency ────────────────────────────────────────

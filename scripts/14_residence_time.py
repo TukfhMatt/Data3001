@@ -24,7 +24,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from config import DROGUE_TYPES, RES, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, RES, operator_path, parse_args, place_label, setting_tag
 from transport import absorption, cell_centres, load_operator, reliable, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
@@ -64,7 +64,7 @@ print(f"{'grid':>5} {'τ':>4} {'type':<10}{'cells':>7}{'mean':>7}{'median':>8}{'
 for r in summary.itertuples():
     print(f"{r.res:>4g}° {r.tau:>4g} {r.drogue:<10}{r.reliable_cells:>7}{r.mean_days:>7.0f}{r.median_days:>8.0f}"
           f"{r.q25_days:>7.0f}–{r.q75_days:<4.0f}{r.q90_days:>6.0f}{r.max_days:>6.0f}  "
-          f"{r.max_lon:.1f}°E {-r.max_lat:.1f}°S")
+          f"{place_label(r.max_lon, r.max_lat)}")
 
 out_summary = f"data/residence_time_{TAG}.csv"
 out_cells = f"data/residence_time_cells_{TAG}.csv"

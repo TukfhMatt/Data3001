@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from scipy.sparse.linalg import eigsh
 
-from config import DROGUE_TYPES, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, operator_path, parse_args, place_label, setting_tag
 from transport import cell_centres, load_operator, reliable, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -129,7 +129,7 @@ for name in DROGUE_TYPES:
         for dd in CHECK_DAYS:
             row[f"stay_{dd}d"] = stay(P, m, steps[dd])
         summary.append(row)
-        print(f"  {g + 1:>6}{len(m):>7}{row['lon']:>8.1f}°E {-row['lat']:>4.1f}°S{row['one_step']:>8.0%}"
+        print(f"  {g + 1:>6}{len(m):>7}{place_label(row['lon'], row['lat']):>16}{row['one_step']:>8.0%}"
               f"{row['stay_30d']:>7.0%}{row['stay_365d']:>7.0%}{row['band_30d']:>11.0%}")
     cells_out.append(pd.DataFrame({"drogue": name, "lon": lon, "lat": lat, "reliable": ok,
                                    "region": np.where(region >= 0, region + 1, 0)}))
