@@ -95,6 +95,7 @@ python scripts/22_drogue_loss.py           # when grounded drifters lost their d
 python scripts/23_coastal_stranding.py     # split stranding into six named coasts (needs 09)
 python scripts/24_traffic_exposure.py      # traffic-weighted exposure by coast and route (needs 21, 23)
 python scripts/25_risk_atlas.py            # release-risk atlas: every cell and horizon with intervals (needs 23)
+python scripts/26_hypothesis_tests.py      # decision rules of H1, H2 and H3 (needs 04 and 10)
 ```
 
 Scripts `01`–`04`, `11`–`17` and `19`–`21` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
@@ -155,6 +156,7 @@ python scripts/03_transition_matrix.py --box -80 -40 25 45 --data data/gulfstrea
 | `23_coastal_stranding.py` | Splits each operator's stranded state into six named coasts by where drifters ran aground, checks that the split reproduces the saved operator, and reports stranding on each coast (eventually and within 7, 30 and 365 days) and expected days to strand, for every cell and the release points from `04`, with 1,000 resamples of whole drifters | `data/P_{drogued,undrogued,oil,oil_check}_coast_…npz`, `data/coastal_stranding_points_…csv`, `data/coastal_stranding_cells_…csv`, `data/coastal_stranding_support_…csv`, `data/coast_counts_…npz`, `figures/agulhas_coastal_stranding_…png` |
 | `24_traffic_exposure.py` | Spreads releases over R by shipping density, for all traffic and six routes: stranding by coast, days to strand, near-shore days, each route's share of each coast's stranding and oil's mass stranded, with 1,000 resamples of whole drifters; sensitivity runs with lane-pixel weights and without the weight moved off unreliable cells. Needs the shipping zip. | `data/traffic_exposure_…csv`, `data/traffic_nearshore_segments_…csv`, `data/traffic_weights_…csv`, `figures/agulhas_traffic_exposure_…png` |
 | `25_risk_atlas.py` | Release-risk atlas: for every ocean cell, the share afloat in R, exited across each edge and stranded on each coast at 7, 30 and 365 days and eventually, and days to strand, with 95% intervals and each cell's reliability flags | `data/risk_atlas_…csv`, `figures/agulhas_risk_atlas_…png` |
+| `26_hypothesis_tests.py` | Applies the proposal's decision rules: the interval of P(exit E) − P(exit W) over reliable cells (H1), undrogued against drogued stranding in the lane cells (H2) and folds won against persistence and advection from 14 days (H3), with 1,000 resamples of whole drifters | `data/hypothesis_h{1,2,3}_…csv`, `figures/agulhas_hypothesis_tests_…png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
 
@@ -240,3 +242,4 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Traffic-weighted exposure by coast and route, with sensitivity to the weights
 - [x] Release-risk atlas: every release cell and horizon, with intervals
 - [x] Second region: the core pipeline on the Gulf Stream box, with no region-specific code changes
+- [x] Hypothesis tests: H1 supported, H2 supported in 7 of 8 lane cells (drogued is a lower bound), H3 supported from 17.5 days (at 14 days the undrogued operator beats advection in 3 of 5 folds)
