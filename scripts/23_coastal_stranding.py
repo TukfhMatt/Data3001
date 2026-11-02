@@ -17,8 +17,8 @@ coasts. Reports, for every cell and for the release points from 04:
 with 95% intervals for the release points from N_BOOT resamples of whole
 drifters (as 06). Drogued stranding is a lower bound (see 22).
 
-Needs the matrices from 03 and 09, data/oil_moves_….npz from 09 and
-data/release_candidates.csv from 04.
+Needs the matrices from 03 and 09, data/oil_moves_….npz from 09 and the
+release points from 04 (same box, default grid and lag).
 
     .venv/bin/python scripts/23_coastal_stranding.py --res 1 --tau 3.5
 """
@@ -34,13 +34,14 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Patch
 import xarray as xr
 
-from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args, setting_tag
-from transport import (COAST_COLORS, COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, cell_centres, coast_of,
+from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args, release_points_path, setting_tag
+from transport import (COAST_COLORS, COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, cell_centres, check_coast_box, coast_of,
                        last_obs_index, load_operator, move_indices, reliable, resampled_counts,
                        row_normalise, same_drogue, state_of, strand_times, stranding_chain, to_grid,
                        transition_states)
 
 args = parse_args(__doc__, grid=True, lag=True)
+check_coast_box(args.box)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 RES, TAU = args.res, args.tau
 TAG = setting_tag(RES, TAU, args.box)
@@ -142,7 +143,7 @@ np.savez_compressed(out_counts, n_states=n_states, **{
 
 
 # ── 3. Stranding by coast: eventual, by horizon, time to strand ──────────────
-points = pd.read_csv("data/release_candidates.csv")[["name", "lon", "lat"]]
+points = pd.read_csv(release_points_path(args.box))[["name", "lon", "lat"]]
 release_states = np.array([state_of(ops["drogued"], r.lon, r.lat) for r in points.itertuples()])
 steps = {d: int(round(d / TAU)) for d in HORIZONS}
 coast_cols = slice(strand_col, n_states)

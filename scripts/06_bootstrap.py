@@ -14,8 +14,8 @@ propagated again. Repeated N_BOOT times, this gives:
   • row stability: median total-variation distance (TVD) between bootstrap
     rows and the full-data row, as a data-driven check of the 10-drifter flag
 
-Needs the matrices from 03 and data/release_candidates.csv from 04 (same box,
-grid and lag).
+Needs the matrices from 03 (same box, grid and lag) and the release points
+from 04 (same box, default grid and lag).
 
     .venv/bin/python scripts/06_bootstrap.py --res 1 --tau 3.5
 """
@@ -29,7 +29,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import xarray as xr
 
-from config import DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args
+from config import DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, release_points_path
 from transport import (EXIT_LABELS, coastal_states, drifter_counts, load_operator, move_indices,
                        resampled_counts, row_normalise, same_drogue, state_of, strand_times,
                        transition_states)
@@ -71,7 +71,7 @@ n_cells = len(cells)
 n_states = n_cells + len(EXIT_LABELS)
 coastal = coastal_states(op0)
 
-cand = pd.read_csv("data/release_candidates.csv")
+cand = pd.read_csv(release_points_path(args.box))
 release_states = np.array([state_of(op0, r.lon, r.lat) for r in cand.itertuples()])
 steps = {d: int(round(d / TAU_DAYS)) for d in HORIZONS}
 steps_30 = steps[30]

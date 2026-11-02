@@ -12,42 +12,59 @@ date (`end_date`), which the stranded state in 03 is built from.
 
     .venv/bin/python scripts/00_fetch_agulhas_subset.py
     .venv/bin/python scripts/00_fetch_agulhas_subset.py --metadata-only   # refresh the per-drifter fields only
+    .venv/bin/python scripts/00_fetch_agulhas_subset.py --fetch-box -90 -30 15 55 --out data/gulfstream_gdp1h_subset.nc
+
+Another region needs both --fetch-box (the box of interest plus a margin of
+about 10°, so moves leaving it are seen) and its own --out file; every later
+script then takes that file with --data.
 """
 
 import argparse
 import os
+import time as time_module
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 import xarray as xr
 import zarr
 from tqdm import tqdm
+from zarr.storage import FSStore
 
 ZARR_URL = "https://noaa-oar-hourly-gdp-pds.s3.amazonaws.com/latest/gdp-v2.01.zarr"
-OUT_PATH = "data/agulhas_gdp1h_subset.nc"
+DEFAULT_OUT = "data/agulhas_gdp1h_subset.nc"
 
 # ── 1. Region ────────────────────────────────────────────────────────────────
 # The saved area holds every candidate box from 05_box_selection.py (search
 # area 0–60°E, 55–10°S) plus a margin, so positions just after a drifter
 # leaves the box are kept (needed for the exit states and exit-edge statistics).
-LON_MIN, LON_MAX = -5.0, 65.0
-LAT_MIN, LAT_MAX = -60.0, -5.0
+FETCH_BOX = [-5.0, 65.0, -60.0, -5.0]   # lon_min, lon_max, lat_min, lat_max
 
 STEP_S = 3600       # keep every hourly position (set 6 * 3600 to thin to 6-hourly)
 MAX_GAP_S = 6 * 3600  # drop positions interpolated across > 6 h between fixes
 OBS_VARS = ["time", "lon", "lat", "ve", "vn", "drogue_status", "gap"]
+MAX_TRIES = 5       # attempts per chunk before stopping
 TYPEDEATH = ("0 buoy still alive, 1 ran aground, 2 picked up by vessel, 3 stopped transmitting, "
              "4 sporadic transmissions, 5 bad batteries, 6 inactive status")
 
-parser = argparse.ArgumentParser(description="Fetch the GDP hourly subset for the Agulhas region")
+parser = argparse.ArgumentParser(description="Fetch a GDP hourly subset for one region")
+parser.add_argument("--fetch-box", nargs=4, type=float, default=FETCH_BOX,
+                    metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"), help="area to save")
+parser.add_argument("--out", default=DEFAULT_OUT, help="subset file to write")
 parser.add_argument("--metadata-only", action="store_true",
                     help="add the per-drifter fields to an existing subset without rescanning")
 args = parser.parse_args()
+LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.fetch_box
+OUT_PATH = args.out
+if args.fetch_box != FETCH_BOX and OUT_PATH == DEFAULT_OUT:
+    raise SystemExit(f"--fetch-box needs its own --out file, or it would overwrite {DEFAULT_OUT}.")
 
 os.makedirs("data", exist_ok=True)
 
 # ── 2. Open store ────────────────────────────────────────────────────────────
-root = zarr.open_group(ZARR_URL, mode="r")
+# FSStore's default treats any OSError on a read as a missing chunk and fills
+# it with NaN, which would silently drop that chunk's drifters. Only a chunk
+# that is truly absent (KeyError) may count as missing; other errors are raised.
+root = zarr.open_group(FSStore(ZARR_URL, mode="r", exceptions=(KeyError,)), mode="r")
 n_obs = root["lon"].shape[0]
 chunk = root["lon"].chunks[0]
 n_chunks = int(np.ceil(n_obs / chunk))
@@ -105,8 +122,19 @@ def scan(k):
     return out
 
 
+def scan_retrying(k):
+    """Scan one chunk, retrying read errors; a chunk that keeps failing stops the run."""
+    for attempt in range(MAX_TRIES):
+        try:
+            return scan(k)
+        except Exception as e:
+            if attempt == MAX_TRIES - 1:
+                raise SystemExit(f"Chunk {k} failed after {MAX_TRIES} tries ({e!r}); nothing saved, rerun.")
+            time_module.sleep(2 ** attempt)
+
+
 with ThreadPoolExecutor(max_workers=8) as pool:
-    parts = [p for p in tqdm(pool.map(scan, range(n_chunks)), total=n_chunks,
+    parts = [p for p in tqdm(pool.map(scan_retrying, range(n_chunks)), total=n_chunks,
                              desc="Scanning chunks") if p is not None]
 
 n_gap = sum(p["n_gap"] for p in parts)
@@ -135,7 +163,7 @@ ds = xr.Dataset(
     },
     attrs={
         "source": ZARR_URL,
-        "description": f"GDP hourly subset (step {STEP_S // 3600} h, gap <= {MAX_GAP_S // 3600} h), padded Agulhas box",
+        "description": f"GDP hourly subset (step {STEP_S // 3600} h, gap <= {MAX_GAP_S // 3600} h), padded box",
         "lon_range": f"{LON_MIN}..{LON_MAX}",
         "lat_range": f"{LAT_MIN}..{LAT_MAX}",
     },

@@ -8,8 +8,8 @@ each edge or stranded, with the 95% interval from 06's drifter bootstrap.
 Times are rounded to whole τ steps (1 week = 2, 1 month ≈ 9, 1 year ≈ 104
 steps at τ = 3.5 d), and exits are read through exit_labels.
 
-Needs the matrices from 03, data/release_candidates.csv from 04 and the
-bootstrap intervals from 06 (same box, grid and lag).
+Needs the matrices from 03 and the bootstrap intervals from 06 (same box, grid
+and lag), and the release points from 04 (same box, default grid and lag).
 
     .venv/bin/python scripts/17_release_point_maps.py --res 1 --tau 3.5
 """
@@ -24,7 +24,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-from config import DROGUE_TYPES, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, operator_path, parse_args, place_label, release_points_path, setting_tag
 from transport import load_operator, release, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -36,7 +36,7 @@ DAYS = [7, 30, 365]
 os.makedirs("figures", exist_ok=True)
 
 # ── 1. Release points, matrices and bootstrap intervals ──────────────────────
-points = pd.read_csv("data/release_candidates.csv")
+points = pd.read_csv(release_points_path(args.box))
 ops = {name: load_operator(operator_path(name, RES, TAU, args.box)) for name in DROGUE_TYPES}
 labels = [str(x) for x in ops["drogued"]["exit_labels"]]
 n_cells = len(ops["drogued"]["cell_flat"])
@@ -110,7 +110,7 @@ for i, pt in enumerate(points.itertuples(), start=1):
                     bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"})
     cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="min")
     cb.set_label(f"Probability per {RES:g}° cell (log)")
-    fig.suptitle(f"Release at {pt.name} ({pt.lon:.1f}°E, {-pt.lat:.1f}°S) — {RES:g}°, τ = {TAU:g} d; "
+    fig.suptitle(f"Release at {pt.name} ({place_label(pt.lon, pt.lat)}) — {RES:g}°, τ = {TAU:g} d; "
                  f"95% drifter-bootstrap intervals", fontsize=12)
     slug = re.sub(r"[^a-z0-9]+", "_", pt.name.lower()).strip("_")
     out = f"figures/agulhas_release_{i:02d}_{slug}_{TAG}.png"

@@ -26,13 +26,12 @@ import cdsapi
 import numpy as np
 import xarray as xr
 
-from config import parse_args
+from config import parse_args, wind_paths
 
 args = parse_args(__doc__)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
 
-OUT_DIR = "data/era5"                   # per-year wind at drifter positions
-OUT_PATH = "data/drifter_wind10m.nc"    # all years, aligned with the subset's obs
+OUT_DIR, OUT_PATH = wind_paths(args.data)   # per-year wind at drifter positions; all years, aligned with the subset's obs
 MARGIN = 5.0          # ° around R
 GRID = 0.5            # ° ERA5 output grid
 TIMES = ["00:00", "06:00", "12:00", "18:00"]

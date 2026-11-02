@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from config import MIN_DRIFTERS, grid_shape, parse_args
+from config import MIN_DRIFTERS, box_tag, grid_shape, grid_tag, parse_args
 
 args = parse_args(__doc__, grid=True, multi=True)
 os.makedirs("figures", exist_ok=True)
@@ -33,6 +33,8 @@ traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
 in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
 
 RESOLUTIONS = sorted(args.res, reverse=True)
+TAG = grid_tag(sorted(args.res), args.box)
+COUNTS_OUT = f"data/grid_coverage_{TAG}.npz"
 THRESHOLDS  = [5, 10, 20]   # distinct drifters per cell
 SUBSETS = {
     "Drogued (15 m current)":   in_R &  drogue,
@@ -63,8 +65,7 @@ for res in RESOLUTIONS:
         results[(name, res)] = (obs, drifters, ocean)
 
 # ── 3. Summary table ─────────────────────────────────────────────────────────
-print(f"Distinct drifters per ocean cell in R ({LON_MIN:g}–{LON_MAX:g}°E, "
-      f"{-LAT_MIN:g}–{-LAT_MAX:g}°S)\n")
+print(f"Distinct drifters per ocean cell in R ({box_tag(args.box)})\n")
 header = f"{'Subset':<26}{'Res':>5}{'Cells':>7}{'Median':>8}" + "".join(f"{'≥' + str(t):>7}" for t in THRESHOLDS)
 print(header)
 print("-" * len(header))
@@ -74,13 +75,13 @@ for (name, res), (obs, drifters, ocean) in results.items():
     print(f"{name:<26}{res:>4}°{ocean.sum():>7}{np.median(d):>8.0f}{frac}")
 
 np.savez(
-    "data/grid_coverage.npz",
+    COUNTS_OUT,
     lon_min=LON_MIN, lon_max=LON_MAX, lat_min=LAT_MIN, lat_max=LAT_MAX,
     **{f"{'drogued' if n.startswith('Drogued') else 'undrogued'}_{r}_{k}": v
        for (n, r), (o, d, oc) in results.items()
        for k, v in [("obs", o), ("drifters", d), ("ocean", oc)]},
 )
-print("\nCounts saved → data/grid_coverage.npz")
+print(f"\nCounts saved → {COUNTS_OUT}")
 
 # ── 4. Maps ──────────────────────────────────────────────────────────────────
 try:
@@ -121,9 +122,9 @@ for r, name in enumerate(SUBSETS):
 
 cb = fig.colorbar(mesh, ax=axes, shrink=0.6, extend="min")
 cb.set_label(f"Distinct drifters per cell (grey = fewer than {MIN_DRIFTERS})")
-fig.suptitle("Drifter coverage per grid cell — Agulhas box R", fontsize=13)
+fig.suptitle(f"Drifter coverage per grid cell — {box_tag(args.box)}", fontsize=13)
 
-out = "figures/agulhas_grid_coverage.png"
+out = f"figures/agulhas_grid_coverage_{TAG}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Map saved → {out}")
 plt.close()

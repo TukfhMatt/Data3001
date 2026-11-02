@@ -12,7 +12,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import parse_args
+from config import box_tag, parse_args
 
 args = parse_args(__doc__)
 
@@ -42,14 +42,14 @@ mask = (
     (lat >= LAT_MIN) & (lat <= LAT_MAX)
 )
 
-print(f"\nObservations in Agulhas box : {mask.sum():,}")
+print(f"\nObservations in box : {mask.sum():,}")
 print(f"Fraction of padded subset   : {mask.mean():.2%}")
 
 # ── 3. Trajectories passing through the box ──────────────────────────────────
 rowsize      = ds["rowsize"].values
 traj_idx     = np.repeat(np.arange(len(rowsize)), rowsize)
 trajs_in_box = np.unique(traj_idx[mask])
-print(f"Trajectories passing through Agulhas box: {len(trajs_in_box):,}")
+print(f"Trajectories passing through box: {len(trajs_in_box):,}")
 
 # ── 4. Drogued vs undrogued ──────────────────────────────────────────────────
 drogue = ds["drogue_status"].values  # bool or int: True/1 = drogued
@@ -81,7 +81,7 @@ if use_cartopy:
                c="steelblue",  alpha=0.4, label="Drogued (15m)",              zorder=4)
     ax.scatter(lon[mask_undrogued], lat[mask_undrogued], s=0.3,
                c="darkorange", alpha=0.5, label="Undrogued (surface + wind slip)", zorder=5)
-    ax.set_title("GDP Drifter Observations — Agulhas Region", fontsize=13)
+    ax.set_title(f"GDP Drifter Observations — {box_tag(args.box)}", fontsize=13)
     ax.legend(markerscale=10, loc="lower right")
 else:
     fig, ax = plt.subplots(figsize=(10, 8))
@@ -90,11 +90,11 @@ else:
     ax.scatter(lon[mask_undrogued], lat[mask_undrogued], s=0.3,
                c="darkorange", alpha=0.5, label="Undrogued (surface + wind slip)")
     ax.set_xlabel("Longitude"); ax.set_ylabel("Latitude")
-    ax.set_title("GDP Drifter Observations — Agulhas Region", fontsize=13)
+    ax.set_title(f"GDP Drifter Observations — {box_tag(args.box)}", fontsize=13)
     ax.legend(markerscale=10)
 
 plt.tight_layout()
-out_map = "figures/agulhas_gdp_coverage.png"
+out_map = f"figures/agulhas_gdp_coverage_{box_tag(args.box)}.png"
 plt.savefig(out_map, dpi=150, bbox_inches="tight")
 print(f"\nMap saved → {out_map}")
 plt.close()
@@ -110,9 +110,9 @@ ax.hist(years, bins=np.arange(years.min(), years.max() + 2) - 0.5,
         color="steelblue", edgecolor="white")
 ax.set_xlabel("Year")
 ax.set_ylabel("Observations")
-ax.set_title("Temporal Distribution of GDP Drifter Obs in Agulhas Box")
+ax.set_title(f"Temporal Distribution of GDP Drifter Obs in {box_tag(args.box)}")
 plt.tight_layout()
-out_time = "figures/agulhas_gdp_temporal.png"
+out_time = f"figures/agulhas_gdp_temporal_{box_tag(args.box)}.png"
 plt.savefig(out_time, dpi=150, bbox_inches="tight")
 print(f"Temporal plot saved → {out_time}")
 plt.close()
