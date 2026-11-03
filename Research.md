@@ -336,6 +336,10 @@ Progress:
   - The highest-risk cells for oil at 30 days lie on the Mozambique coast at 35–36°E, 19–22°S (78–97%, intervals from 58%) and off north-east Madagascar at 49.5°E, 16.5°S (80%, 55–100%).
   - Outputs: `data/risk_atlas_…csv` (232,800 rows), `figures/agulhas_risk_atlas_…png`.
 
+- [x] Packaging — `run_all.sh` runs every step in order, with logs, resuming with `--from`, and the core steps on another region with `--box` and `--data`. `scripts/worked_example.py` answers the project's question for any release point, with the cell's reliability, intervals, coast and method flag.
+  - Reproducibility test: a fresh clone in a fresh environment built from `requirements.txt`, given only the three raw inputs (drifter subset, ERA5 winds, shipping zip), ran the 34 steps that are not downloads and reproduced all 115 output tables and matrices exactly (numeric values within 1e-9; text in the tables identical). The downloads themselves were not repeated in this test. Results depend on the GDP store at fetch time.
+  - The Gulf Stream run through `run_all.sh` also reproduced its 45 tables.
+
 - [x] Spill hindcasts — `scripts/29_spill_hindcasts.py` (oil at 3.5%, 1°, τ = 3.5 d; 1,000 resamples of whole drifters). A check of coast and timescale: the matrix holds average conditions over 1995–2022, so it cannot reproduce one event's winds, and one event can neither confirm nor reject a probability.
   - Records: MV Treasure sank on 23 June 2000 at 33.67°S, 18.33°E (400–1,000 t of heavy fuel oil, sources differ), and oil reached Robben and Dassen islands, drifting towards Dassen by 2 July. Castillo de Bellver broke up on 6 August 1983 at 33.28°S, 17.50°E (light crude; 50–60,000 t or 145–170,000 t, sources differ); the oil first drifted towards the coast, then a wind shift took it offshore into the north-west flowing Benguela Current, with little coastal pollution.
   - The rule, set before the script was run: more than 50% stranded within 30 days for Treasure and less than 50% for Castillo de Bellver; Atlantic and Cape receiving the most; north-westward drift of material in R after 14 days. "Consistent" needs the whole interval on the side of what happened. The stranding estimates for both cells had already been seen in the atlas when the rule was written, so it is not blind.
@@ -372,11 +376,12 @@ Progress:
     | 28 d | 3 | 2 | 5 | 5 |
 
     Started from the cell centre, the same information the matrix has, advection loses to the operator in all folds at these horizons. This fits the operator's main strength being calibrated probabilities, not point accuracy.
-  - Chapman–Kolmogorov: 5.1% / 2.1% of rows are above their 95% noise level, so the Markov assumption holds as in R.
+  - Chapman–Kolmogorov: 5.1% / 2.1% of rows are above their 95% noise level, so the Markov assumption holds as in R. The decorrelation time is 1.37 d drogued and 1.40 d undrogued, so τ = 3.5 d suits this box too.
+  - Windage and stranding (`26`): undrogued stranding exceeds drogued with non-overlapping intervals in only 1 of 8 lane cells, against 7 of 8 in R. The result in R is therefore not general.
   - Differences from R: long-run results depend on the grid (mean time in the box 608 → 478 → 350 days drogued and 427 → 379 → 305 days undrogued from 0.5° to 1° to 2°, against about 40 days of spread in R), and drogued transport is seasonal beyond sampling noise in 5 of 6 season pairs (undrogued 6 of 6; drogued 0 of 6 in R). The 1° annual baseline chosen for R therefore should not be assumed elsewhere without rechecking.
 
 Open questions:
 - Drogued stranding rests on the few drifters still drogued when they reached the coast, since 121 of the 139 grounded drifters lost their drogue more than τ before grounding (`22`). The drogued stranding estimate is therefore treated as a lower bound rather than borrowing the undrogued rate.
 - Coastal sparsity is mitigated with short pooled coastal segments, while the main transition matrix remains unchanged and thin segments remain flagged.
 - The annual 1°, τ = 3.5 d operator remains the baseline. Drogued transport shows no seasonality beyond sampling noise and undrogued transport only a small one (permutation test in `19`), so the seasonal operators serve as a sensitivity check.
-- Next: packaging (one-command run, worked example) and the report.
+- Next: the report and presentation.

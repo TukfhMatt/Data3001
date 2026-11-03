@@ -9,7 +9,7 @@ A university data science project (Data3001) that builds a surface-transport ope
 ## Environment
 
 - Use the project virtual environment: `.venv/bin/python` (Python 3.9).
-- Run scripts **from the repository root**. They use relative paths (`data/...`, `figures/...`), and they import `config` and `transport` from `scripts/`.
+- `./run_all.sh` runs every step in order (`--from`, `--list`, and `--box` with `--data` for another region). Run single scripts **from the repository root**. They use relative paths (`data/...`, `figures/...`), and they import `config` and `transport` from `scripts/`.
 - The Python is built against LibreSSL, so urllib3 prints a `NotOpenSSLWarning`; it is harmless. Pass `-W ignore` for cleaner output.
 - Dependencies are pinned in `requirements.txt`. `zarr` stays on 2.x (`zarr.open_group` on an `FSStore` over HTTPS). Do not upgrade to zarr 3 without checking `00_fetch_agulhas_subset.py`.
 - No dask is installed and the machine has 8 GB RAM. Never load the full global GDP arrays (197M observations) into memory; stream them chunk by chunk as `00` does.
@@ -26,7 +26,7 @@ A university data science project (Data3001) that builds a surface-transport ope
 
 ## Code conventions
 
-- Scripts are numbered in run order (`00_`, `01_`, …). New pipeline steps get the next number, e.g. `05_release_points.py`.
+- Scripts are numbered in run order (`00_`, `01_`, …). New pipeline steps get the next number, and go in the `STEPS` list of `run_all.sh` after whatever they read; mark Agulhas-only steps there with `*`. `scripts/worked_example.py` only reads pipeline outputs, so it has no number.
 - `04_shipping_overlay.py` picks candidate release points only in cells that are reliable in both the drogued and undrogued matrices (not `flagged`, not `empty`), so both versions are compared at the same points; hotspots in unreliable cells are moved to the nearest such cell and the shift is printed. Keep that rule for any new release points. Read them through `config.release_points_path(box)`, which gives the box's points picked at the default grid and lag, whatever grid and lag the reading script runs on.
 - Each script starts with a docstring (title line "Agulhas Region — …", then what it does) and is split into numbered sections with headers such as `# ── 2. Pair each obs … ─────`.
 - Plots use `matplotlib.use("Agg")`, cartopy with a plain-matplotlib fallback, and are saved to `figures/` at 150 dpi. Scripts print a short summary and the saved paths.
@@ -59,4 +59,3 @@ Files are `data/P_{drogued|undrogued}_{res}deg_{tau}d_{box}.npz`, built by `conf
 - After finishing a pipeline step, update the checklist in `Research.md` with the key numbers, and the Status section of `README.md`.
 - Notes, docs, docstrings and code comments describe only the current approach and current results. No change history ("previously…", "instead of…", "was X, now Y", old numbers kept for comparison): when something changes, rewrite the text as if the current approach had always been the plan. Git history holds the evolution.
 - Work on the `alex` branch (tracks `origin/alex`). Commit or push only when asked.
-- The notebook `notebooks/01_agulhas_gdp_exploration.ipynb` is not part of the pipeline (it imports `gdp_6h`, loads the full dataset and assumes a 0/1 drogue flag). Do not use it as a reference.
