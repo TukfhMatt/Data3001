@@ -291,7 +291,7 @@ for name, color in [("drogued", "#2a78d6"), ("undrogued", "#eb6834")]:
     cal = e.groupby(b, observed=True).agg(p=("p_exit", "mean"), o=("exited", "mean"), n=("exited", "size"))
     cal = cal[cal.n >= 30]
     ax.plot(cal.p, cal.o, marker="o", lw=2, color=color, label=name.capitalize())
-ax.set_xlabel(f"Predicted probability of having left R across an edge by day {max(HORIZON_STEPS) * TAU:g}")
+ax.set_xlabel(f"Predicted probability of having left R by day {max(HORIZON_STEPS) * TAU:g}")
 ax.set_ylabel("Observed share that left")
 ax.set_title("Exit calibration (bins with ≥ 30 test starts)", fontsize=10)
 ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.grid(alpha=0.3); ax.legend(fontsize=8)

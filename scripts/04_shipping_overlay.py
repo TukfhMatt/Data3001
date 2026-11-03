@@ -275,7 +275,9 @@ for dname, (u, v, _) in currents.items():
     col = f"{dname}_coastal_exposure_days_30d"
     for _, r in table.iterrows():
         text = f"{r['name']}  {r[col]:.1f} d" if r["kind"] == "hotspot" else f"{r[col]:.1f} d"
-        ax.annotate(text, (r["lon"], r["lat"]), xytext=(7, -12), textcoords="offset points",
+        # A label beside the box's east edge goes to the left of its point, or the edge would cut it
+        ax.annotate(text, (r["lon"], r["lat"]), xytext=(-26, -12) if r["lon"] > LON_MAX - 2 else (7, -12),
+                    textcoords="offset points",
                     fontsize=8, color="#222222", zorder=7, path_effects=halo)
 
     if ccrs:
