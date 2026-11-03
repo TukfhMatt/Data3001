@@ -31,7 +31,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from config import DROGUE_TYPES, RES, TAU_DAYS, box_tag, operator_path, parse_args, release_points_path
+from config import DROGUE_TYPES, RES, TAU_DAYS, box_tag, operator_path, parse_args, region_prefix, release_points_path
 from transport import load_operator, state_of
 
 args = parse_args(__doc__)
@@ -201,7 +201,7 @@ for ax, name in zip(axes[1], DROGUE_TYPES):
     ax.legend(fontsize=8, loc="upper center", bbox_to_anchor=(0.5, -0.1), ncol=3, frameon=False)
 fig.suptitle("Sensitivity to lag τ and grid size — box R", fontsize=12)
 fig.tight_layout()
-out = f"figures/agulhas_sensitivity_{BOX_TAG}.png"
+out = f"figures/{region_prefix(args.data)}_sensitivity_{BOX_TAG}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Figure saved → {out}")
 plt.close()

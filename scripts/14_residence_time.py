@@ -24,7 +24,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from config import DROGUE_TYPES, RES, operator_path, parse_args, place_label, setting_tag
+from config import DROGUE_TYPES, RES, operator_path, parse_args, place_label, region_prefix, setting_tag
 from transport import absorption, cell_centres, load_operator, reliable, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
@@ -94,7 +94,7 @@ for ax, name in zip(axes, DROGUE_TYPES):
 cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="max")
 cb.set_label("Expected time afloat in R (days)")
 fig.suptitle(f"Residence time from each reliable cell — {MAP_RES:g}°, τ = {args.tau[0]:g} d", fontsize=12)
-out_png = f"figures/agulhas_residence_time_{TAG}.png"
+out_png = f"figures/{region_prefix(args.data)}_residence_time_{TAG}.png"
 plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"\nSaved → {out_summary}\nSaved → {out_cells}\nSaved → {out_png}")

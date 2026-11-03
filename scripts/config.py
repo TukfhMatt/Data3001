@@ -21,6 +21,8 @@ RESOLUTIONS = [0.5, 1.0, 2.0]                # grids compared in 02 and built in
 RES = 1.0                                    # grid for single-grid steps (04)
 TAU_DAYS = 3.5
 MIN_DRIFTERS = 10                            # rows with fewer distinct drifters are flagged
+OIL_WINDAGE_RANGE = {"oil_3pct": 0.03, "oil": 0.035, "oil_4pct": 0.04}   # oil matrices, by share of the wind
+DISAGREE_TVD = 0.3                           # oil against its check at 30 d above this depends on the method
 DROGUE_TYPES = {"drogued": True, "undrogued": False}
 
 
@@ -90,6 +92,12 @@ def setting_tag(res, tau, box):
     settings never overwrite each other, e.g. '1deg_3p5d_10E-55E_45S-15S' or
     '0p5-1-2deg_3p5d_10E-55E_45S-15S'."""
     return f"{_join(res)}deg_{_join(tau)}d_{box_tag(box)}"
+
+
+def region_prefix(data):
+    """First word of the subset's file name, which starts figure names, e.g.
+    'gulfstream' for data/gulfstream_gdp1h_subset.nc."""
+    return os.path.basename(data).split("_")[0]
 
 
 def place_label(lon, lat):

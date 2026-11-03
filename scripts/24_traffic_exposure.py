@@ -180,6 +180,7 @@ weights = {"density": release_weights(capped),
 SENSITIVITY = ["lane_share", "reliable_only"]
 W, route_share, moved_stats = weights["density"]
 RELEASES = np.r_[["all"], ROUTES]
+np.savez_compressed(f"data/traffic_releases_{TAG}.npz", W=W, route_share=route_share, releases=RELEASES)
 south_share = W[0][cell_lat < ARTIFACT_LAT].sum()
 
 # ── 3. Near-shore cells of each coast, from the pooled segments of 21 ────────

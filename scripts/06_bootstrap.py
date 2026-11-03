@@ -29,7 +29,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 import xarray as xr
 
-from config import DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, release_points_path
+from config import (DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, region_prefix,
+                    release_points_path)
 from transport import (EXIT_LABELS, coastal_states, drifter_counts, load_operator, move_indices,
                        resampled_counts, row_normalise, same_drogue, state_of, strand_times,
                        transition_states)
@@ -228,7 +229,7 @@ cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="max")
 cb.set_label("Median bootstrap TVD of the row (0 = stable; grey = no data)")
 fig.suptitle(f"Row stability under drifter resampling ({N_BOOT} bootstraps, {RES:g}°, τ = {TAU_DAYS:g} d); "
              "dots = release points", fontsize=12)
-out_map = f"figures/agulhas_bootstrap_rows_{TAG}.png"
+out_map = f"figures/{region_prefix(args.data)}_bootstrap_rows_{TAG}.png"
 plt.savefig(out_map, dpi=150, bbox_inches="tight")
 plt.close()
 
@@ -257,7 +258,7 @@ axes[0].set_yticklabels(cand.name)
 axes[0].legend(loc="lower right", fontsize=9, frameon=False)
 fig.suptitle(f"One-year fate of each release point, 95% drifter-bootstrap intervals "
              f"({RES:g}°, τ = {TAU_DAYS:g} d)", fontsize=12)
-out_fate = f"figures/agulhas_bootstrap_fates_{TAG}.png"
+out_fate = f"figures/{region_prefix(args.data)}_bootstrap_fates_{TAG}.png"
 plt.savefig(out_fate, dpi=150, bbox_inches="tight")
 plt.close()
 

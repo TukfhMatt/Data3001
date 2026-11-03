@@ -49,6 +49,7 @@ N_BOOT = 1000
 SEED = 0
 HORIZONS = [7, 30, 365]
 MATRICES = ["drogued", "undrogued", "oil", "oil_check"]
+WINDAGE_MATRICES = ["oil_3pct", "oil_4pct"]   # split for 25 and 28, which report them
 COAST_EXIT_LABELS = np.r_[EXIT_LABELS[:STRANDED], COAST_LABELS]
 
 os.makedirs("figures", exist_ok=True)
@@ -72,7 +73,7 @@ coast_of_traj = np.full(ds.sizes["traj"], -1)
 coast_of_traj[traj_idx[grounded]] = coast_of(lon[grounded], lat[grounded])
 start, end, stranded = move_indices(traj_idx, t, in_R, TAU, strand_t)
 
-base = {name: load_operator(operator_path(name, RES, TAU, args.box)) for name in MATRICES}
+base = {name: load_operator(operator_path(name, RES, TAU, args.box)) for name in MATRICES + WINDAGE_MATRICES}
 cells = base["drogued"]["cell_flat"]
 n_cells = len(cells)
 n_base = n_cells + len(EXIT_LABELS)
@@ -100,7 +101,7 @@ def matrix(counts):
 
 oil_moves = np.load(f"data/oil_moves_{TAG}.npz")
 counts, ops, support = {}, {}, []
-for name in MATRICES:
+for name in MATRICES + WINDAGE_MATRICES:
     if name in DROGUE_TYPES:
         keep = same_drogue(drogue, start, end, stranded, DROGUE_TYPES[name])
         s = start[keep]

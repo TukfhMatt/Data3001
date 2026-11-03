@@ -46,6 +46,7 @@ from config import (
     grid_shape,
     operator_path,
     parse_args,
+    region_prefix,
     release_points_path,
     setting_tag,
 )
@@ -700,7 +701,7 @@ fig.suptitle(
 )
 fig.tight_layout()
 
-figure_file = f"figures/agulhas_seasonal_summary_{TAG}.png"
+figure_file = f"figures/{region_prefix(args.data)}_seasonal_summary_{TAG}.png"
 plt.savefig(figure_file, dpi=150, bbox_inches="tight")
 plt.close()
 

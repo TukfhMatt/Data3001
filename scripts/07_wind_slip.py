@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 import xarray as xr
 
-from config import MIN_DRIFTERS, box_tag, grid_shape, parse_args
+from config import MIN_DRIFTERS, box_tag, grid_shape, parse_args, region_prefix
 
 args = parse_args(__doc__, grid=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
@@ -163,7 +163,7 @@ cb = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02, extend="max")
 cb.set_label("Slip speed, cm/s (undrogued − drogued mean velocity)")
 ax.set_title(f"Undrogued wind slip — colour per {RES:g}° cell (≥ {MIN_DRIFTERS} drifters of each type), arrows {BLOCK:g}° block means",
              fontsize=11)
-out = f"figures/agulhas_wind_slip_{tag}.png"
+out = f"figures/{region_prefix(args.data)}_wind_slip_{tag}.png"
 plt.savefig(out, dpi=150, bbox_inches="tight")
 print(f"Map saved → {out}")
 plt.close()

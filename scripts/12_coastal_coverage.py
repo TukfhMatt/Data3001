@@ -21,7 +21,7 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from config import DROGUE_TYPES, MIN_DRIFTERS, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, MIN_DRIFTERS, operator_path, parse_args, region_prefix, setting_tag
 from transport import coastal_states, load_operator
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
@@ -76,7 +76,7 @@ for ax, tau in zip(axes[0], args.tau):
     ax.set_title(f"τ = {tau:g} d", fontsize=10)
     ax.legend(frameon=False, fontsize=8, loc="lower right")
 fig.suptitle("Coastal cells: drifter support against offshore", fontsize=12)
-out_png = f"figures/agulhas_coastal_support_{TAG}.png"
+out_png = f"figures/{region_prefix(args.data)}_coastal_support_{TAG}.png"
 plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"\nSaved → {out_csv}\nSaved → {out_png}")

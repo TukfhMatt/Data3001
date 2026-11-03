@@ -34,7 +34,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from scipy.sparse.linalg import eigsh
 
-from config import DROGUE_TYPES, operator_path, parse_args, place_label, setting_tag
+from config import DROGUE_TYPES, operator_path, parse_args, place_label, region_prefix, setting_tag
 from transport import cell_centres, load_operator, reliable, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True)
@@ -166,7 +166,7 @@ for ax, name in zip(axes, DROGUE_TYPES):
         ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
     ax.set_title(f"{name.capitalize()}: {k} regions", fontsize=10)
 fig.suptitle(f"Almost-invariant regions (reliable cells) — {RES:g}°, τ = {TAU:g} d", fontsize=12)
-out_png = f"figures/agulhas_almost_invariant_{TAG}.png"
+out_png = f"figures/{region_prefix(args.data)}_almost_invariant_{TAG}.png"
 plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"\nSaved → {out_summary}\nSaved → {out_cells}\nSaved → {out_png}")

@@ -23,7 +23,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 import xarray as xr
 
-from config import DROGUE_TYPES, _tag, box_tag, parse_args
+from config import DROGUE_TYPES, _tag, box_tag, parse_args, region_prefix
 from transport import STRAND_MATCH_S, last_obs_index, move_indices, same_drogue, strand_times
 
 args = parse_args(__doc__, lag=True)
@@ -116,7 +116,7 @@ ax.set_ylabel("Density")
 ax.set_title("Drifters whose record ends in R: when was the drogue lost?")
 ax.legend(frameon=False)
 fig.tight_layout()
-out_fig = f"figures/agulhas_drogue_loss_{TAG}.png"
+out_fig = f"figures/{region_prefix(args.data)}_drogue_loss_{TAG}.png"
 fig.savefig(out_fig, dpi=150)
 
 # ── 5. Summary ───────────────────────────────────────────────────────────────

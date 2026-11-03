@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Patch
 
-from config import DROGUE_TYPES, RES, operator_path, parse_args, setting_tag
+from config import DROGUE_TYPES, RES, operator_path, parse_args, region_prefix, setting_tag
 from transport import absorption, cell_centres, load_operator, reliable, to_grid
 
 args = parse_args(__doc__, grid=True, lag=True, multi=True)
@@ -103,7 +103,7 @@ fig.legend(handles=[Patch(color=FATE_COLORS[lab], label=lab) for lab in labels],
            loc="center right", frameon=False)
 fig.suptitle(f"Eventual exit or stranding from each reliable cell — {MAP_RES:g}°, τ = {args.tau[0]:g} d",
              fontsize=12)
-out_png = f"figures/agulhas_exit_zones_{TAG}.png"
+out_png = f"figures/{region_prefix(args.data)}_exit_zones_{TAG}.png"
 plt.savefig(out_png, dpi=150, bbox_inches="tight")
 plt.close()
 print(f"\nSaved → {out_summary}\nSaved → {out_cells}\nSaved → {out_png}")
