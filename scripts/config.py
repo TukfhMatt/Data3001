@@ -26,9 +26,10 @@ DISAGREE_TVD = 0.3                           # oil against its check at 30 d abo
 DROGUE_TYPES = {"drogued": True, "undrogued": False}
 
 
-def parse_args(doc, grid=False, lag=False, multi=False):
+def parse_args(doc, grid=False, lag=False, multi=False, extra=None):
     """Parse --box and --data, plus --res / --tau when the script uses them.
-    With multi=True, --res and --tau take several values (lists)."""
+    With multi=True, --res and --tau take several values (lists). extra adds a
+    script's own options to the parser."""
     p = argparse.ArgumentParser(description=doc.strip().splitlines()[0])
     p.add_argument("--box", nargs=4, type=float, default=list(BOX),
                    metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"))
@@ -39,6 +40,8 @@ def parse_args(doc, grid=False, lag=False, multi=False):
     if lag:
         p.add_argument("--tau", type=float, nargs="+" if multi else None,
                        default=[TAU_DAYS] if multi else TAU_DAYS, help="lag in days")
+    if extra:
+        extra(p)
     args = p.parse_args()
     check_box_in_subset(args.box, args.data)
     return args

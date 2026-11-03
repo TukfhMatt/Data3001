@@ -56,50 +56,15 @@ On the first run, Cartopy may need an internet connection to download the Natura
 
 ## Running the pipeline
 
-Run everything **from the repository root**, since the scripts use relative paths to `data/` and `figures/`:
+One command runs every step in order, with one log per step in `data/logs/`. It stops at the first failure and tells you how to resume:
 
 ```bash
-source .venv/bin/activate
-python scripts/00_fetch_agulhas_subset.py   # once: ~1.2 GB streamed, 492 MB saved
-python scripts/01_agulhas_gdp_exploration.py
-python scripts/02_grid_coverage.py
-python scripts/03_transition_matrix.py
-python scripts/03_transition_matrix.py --res 1 --tau 2 5 7  # other lags, needed by 10, 18 and 20
-mkdir -p data/shipping                     # shipping data for 04, 05 and 24: 458 MB, read directly from the zip
-curl -L -o data/shipping/shipdensity_commercial.zip \
-  https://datacatalogfiles.worldbank.org/ddh-published/0037580/5/DR0045405/shipdensity_commercial_.zip
-python scripts/04_shipping_overlay.py
-python scripts/05_box_selection.py        # compare candidate boxes and choose R
-python scripts/06_bootstrap.py             # ~2 min at 1°
-python scripts/07_wind_slip.py             # undrogued − drogued slip per cell
-python scripts/08_fetch_era5.py            # ERA5 winds at drifter positions (needs ~/.cdsapirc)
-python scripts/09_oil_wind.py              # oil matrix: undrogued + missing windage (+ drogued check)
-python scripts/10_validation.py            # held-out validation, 5-fold by drifter
-python scripts/10_validation.py --res 1 --tau 2      # the other settings compared in 18
-python scripts/10_validation.py --res 1 --tau 5
-python scripts/10_validation.py --res 0.5 --tau 3.5
-python scripts/10_validation.py --res 2 --tau 3.5
-python scripts/11_whole_box_analysis.py    # row support per grid and drogue type
-python scripts/12_coastal_coverage.py      # coastal-cell support against offshore
-python scripts/13_trap_stability.py        # one-year retention hotspots, across grids and bootstrapped (~1 min)
-python scripts/14_residence_time.py        # expected time afloat in R from each cell
-python scripts/15_exit_zones.py            # eventual exit (W/E/S/N) or stranding from each cell
-python scripts/16_almost_invariant_regions.py  # spectral regions that keep material to themselves
-python scripts/17_release_point_maps.py    # release maps at 7, 30 and 365 days (needs 06)
-python scripts/18_sensitivity.py           # τ and grid sensitivity
-python scripts/19_seasonal_matrices.py     # DJF/MAM/JJA/SON seasonal operators and TVD comparison
-python scripts/19_seasonal_matrices.py --res 2 --tau 3.5  # coarser seasonal robustness check
-python scripts/20_chapman_kolmogorov.py    # P(tau)^2 vs direct P(2*tau) Markov-consistency check
-python scripts/21_coastal_pooling.py       # pool thin coastal cells into short coastal segments
-python scripts/22_drogue_loss.py           # when grounded drifters lost their drogue (stranding drogue rule)
-python scripts/23_coastal_stranding.py     # split stranding into six named coasts (needs 09)
-python scripts/24_traffic_exposure.py      # traffic-weighted exposure by coast and route (needs 21, 23)
-python scripts/25_risk_atlas.py            # release-risk atlas: every cell and horizon with intervals (needs 23)
-python scripts/26_hypothesis_tests.py      # decision rules of H1, H2 and H3 (needs 04 and 10)
-python scripts/27_decorrelation_time.py    # velocity decorrelation time, which sets how short τ can be
-python scripts/28_oil_windage.py           # oil across 3%, 3.5% and 4% wind (needs 09, 23 and 24)
-python scripts/29_spill_hindcasts.py       # the Treasure and Castillo de Bellver spills against the oil matrix (needs 09, 19 and 23)
+./run_all.sh                 # every step: roughly 30 minutes on an idle 8 GB laptop once the downloads are in place
+./run_all.sh --list          # print the steps
+./run_all.sh --from 23       # resume at a step
 ```
+
+Downloads run only when their file is missing: `00` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `08` (ERA5 winds, which need `~/.cdsapirc`, a CDS account and the ERA5 licence, and take many hours). The scripts use relative paths to `data/` and `figures/`, so any single step can also be run by hand from the repository root, e.g. `python scripts/15_exit_zones.py`. The script table below says what each one does and needs.
 
 Scripts `01`–`04`, `11`–`17` and `19`–`21` take the region, grid and lag as options (defaults in `scripts/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
 
@@ -118,7 +83,7 @@ Outputs of `11`–`17` and `19`–`21` carry the grids and lags they were run on
 
 τ must be a whole number of hours. If a box side is not a multiple of the grid size (e.g. 45° at 2°), the last row or column is a partial cell cut off at the box edge.
 
-`data/` and `figures/` are not in git. After cloning, run `00` and then `03` to rebuild the matrices.
+`data/` and `figures/` are not in git. After cloning, `./run_all.sh` rebuilds them.
 
 ### Another region
 
@@ -126,10 +91,10 @@ A box outside the area saved by `00` needs its own subset, with a margin of abou
 
 ```bash
 python scripts/00_fetch_agulhas_subset.py --fetch-box -90 -30 15 55 --out data/gulfstream_gdp1h_subset.nc
-python scripts/03_transition_matrix.py --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc
+./run_all.sh --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc
 ```
 
-`01`–`04`, `06`, `07` and `10`–`22` run this way, in the order of the list above. `04` picks release points by traffic alone outside R, since its named ports are all in R. `05` searches around the Agulhas core only, and `23`–`25` stop with a message outside the Agulhas area, because the named coasts and routes describe that region. `08` and `09` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, and figure names start with the first word of the subset's file name (here `gulfstream_`).
+`./run_all.sh --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc` runs the steps that apply: `01`–`04`, `06`, `07`, `10`–`22`, `26` and `27`. `04` picks release points by traffic alone outside R, since its named ports are all in R. `05` searches around the Agulhas core only, and `23`–`25` stop with a message outside the Agulhas area, because the named coasts and routes describe that region. `08` and `09` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, and figure names start with the first word of the subset's file name (here `gulfstream_`).
 
 | Script | What it does | Output |
 |---|---|---|
@@ -137,7 +102,7 @@ python scripts/03_transition_matrix.py --box -80 -40 25 45 --data data/gulfstrea
 | `01_agulhas_gdp_exploration.py` | Observation and drifter counts in R, drogued vs undrogued, coverage map, observations per year | `figures/agulhas_gdp_coverage_{box}.png`, `figures/agulhas_gdp_temporal_{box}.png` |
 | `02_grid_coverage.py` | Distinct drifters per cell at each grid size (default 0.5°, 1°, 2°), used to choose the grid | `figures/agulhas_grid_coverage_{grids}deg_{box}.png`, `data/grid_coverage_{grids}deg_{box}.npz` |
 | `03_transition_matrix.py` | Builds transition matrices for drogued and undrogued drifters at every grid and lag given (default 0.5°, 1°, 2°; τ = 3.5 days), with exit states for each edge and a stranded state from drifters that ran aground in R, then runs a test release | `data/P_{drogued,undrogued}_{res}deg_{tau}d_{box}.npz`, e.g. `data/P_drogued_1deg_3p5d_10E-55E_45S-15S.npz` |
-| `04_shipping_overlay.py` | Overlays commercial shipping density (World Bank / IMF AIS, 2015–2021) on the mean current from each drogue type, picks candidate release points (busiest lanes + known hotspots) in cells reliable in both matrices, and ranks them by near-shore exposure under the drogued and the undrogued matrix. Needs the shipping zip, see the run list above. | `figures/agulhas_shipping_currents_{drogued,undrogued}_{tag}.png`, `data/release_candidates_{tag}.csv`, `data/shipping_{tag}.npz` |
+| `04_shipping_overlay.py` | Overlays commercial shipping density (World Bank / IMF AIS, 2015–2021) on the mean current from each drogue type, picks candidate release points (busiest lanes + known hotspots) in cells reliable in both matrices, and ranks them by near-shore exposure under the drogued and the undrogued matrix. Needs the shipping zip, which `run_all.sh` downloads. | `figures/agulhas_shipping_currents_{drogued,undrogued}_{tag}.png`, `data/release_candidates_{tag}.csv`, `data/shipping_{tag}.npz` |
 | `05_box_selection.py` | Scores every candidate bounding box containing the Agulhas core on undrogued data volume, reliable-cell share, shipping density and oil retention; reports the Pareto set, a recommended box and a side-by-side of named options | `figures/agulhas_box_selection.png`, `data/box_pareto.csv`, `data/box_options.csv` |
 | `06_bootstrap.py` | Resamples whole drifters 1,000 times per drogue type, rebuilds the matrix each time and re-propagates the release points from `04`: 95% intervals on each point's fate (still in R, exits, stranded, 30-day coastal exposure), whether drogued and undrogued differ, and how stable each row is (median bootstrap TVD) | `data/bootstrap_release_*.csv`, `data/bootstrap_difference_*.csv`, `data/bootstrap_rows_*.npz`, `figures/agulhas_bootstrap_fates_*.png`, `figures/agulhas_bootstrap_rows_*.png` |
 | `07_wind_slip.py` | Undrogued − drogued mean velocity per cell (the extra surface wind drift undrogued drifters carry), latitude-band means with 95% intervals from resampling whole drifters | `figures/agulhas_wind_slip_{res}deg_{box}.png`, `data/wind_slip_cells_…csv`, `data/wind_slip_bands_…csv` |
@@ -166,7 +131,6 @@ python scripts/03_transition_matrix.py --box -80 -40 25 45 --data data/gulfstrea
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
 
-`notebooks/01_agulhas_gdp_exploration.ipynb` is not part of the pipeline and does not run on this setup; use the scripts.
 
 ---
 ## Whole-box results
@@ -194,6 +158,38 @@ The core pipeline also runs on the Gulf Stream, box 80–40°W, 25–45°N, with
 - **Point accuracy.** At 14 days the operator beats advection in no fold, and at 28 days the drogued operator beats persistence in only 2 of 5 folds. The undrogued operator beats both in all 5 folds at 28 days.
 - **Grid.** Mean time in the box falls from 608 / 427 days at 0.5° to 350 / 305 days at 2°, against differences of about 40 days in R, so long-run results here depend on the grid.
 - **Seasonality.** Drogued transport is seasonal beyond sampling noise in 5 of 6 season pairs, so the annual matrix is a weaker assumption here.
+- **Windage and stranding.** Undrogued stranding exceeds drogued with non-overlapping intervals in only 1 of 8 lane cells, against 7 of 8 in R, since the busiest lanes here mostly strand little either way.
+
+## Worked example
+
+`scripts/worked_example.py` answers the project's question for any point: where does material released here go? It reads the pipeline's outputs and reports what is needed to judge the answer, namely the data behind the cell, 95% intervals, the coast and, for oil, whether the result depends on the method. It also saves a map.
+
+```bash
+python scripts/worked_example.py --lon 40.5 --lat -16.5 --matrix oil
+```
+
+```text
+Release: 40.5°E 16.5°S, in the 1° cell at 40.5°E 16.5°S; oil matrix, τ = 3.5 days
+Data behind this cell: 25 drifters.
+
+            afloat in R         exit W            exit E            exit S            exit N            stranded
+   7 days   75.9% (62%–94%)      0.0% (0%–0%)      0.0% (0%–0%)      0.0% (0%–0%)      3.4% (1%–8%)     20.6% (0%–35%)
+  30 days   37.7% (23%–55%)      0.0% (0%–0%)      0.0% (0%–0%)      0.0% (0%–0%)     21.1% (9%–36%)    41.2% (20%–61%)
+ 365 days    0.7% (0%–2%)        0.7% (0%–1%)      2.4% (1%–5%)      0.1% (0%–0%)     25.6% (12%–42%)   70.5% (53%–84%)
+
+Eventually: exit W 1%, exit E 3%, exit S 0%, exit N 26%, stranded 71%. Mean time afloat in R: 41 days.
+
+Where it strands, eventually:
+  52.5%  Central and northern Mozambique
+  10.0%  Southern Mozambique (to 21°S)
+   7.1%  West and south Madagascar
+   0.7%  South African south and east coast
+  Among material that strands, it takes 35 days on average (22–56).
+
+Method check at 30 days: oil against its drogued check differ by TVD 0.42, above 0.3, so this oil result depends on the method.
+```
+
+Read this as: oil released on the Mozambique Channel lane mostly comes ashore, about 41% within a month and 71% within a year, chiefly on central and northern Mozambique, but the amount depends on how oil is modelled. A thin release cell gets a warning and the nearest reliable cell to compare with. `--matrix` also takes `drogued`, `undrogued`, `oil_3pct` and `oil_4pct`, and `--box` and `--data` run it on another region.
 
 ## Using the transition matrix
 
@@ -251,5 +247,6 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Release-risk atlas: every release cell and horizon, with intervals
 - [x] Spill hindcasts: Castillo de Bellver consistent on all three rules; Treasure inconclusive, because its cell has only 4 undrogued drifters and 1° is too coarse for a spill about 10 km offshore
 - [x] Oil windage range: 3%, 3.5% and 4% of the wind; windage changes how soon oil strands more than how much, and the coast ranking holds
+- [x] Packaging: one command runs every step (`run_all.sh`); a fresh clone in a fresh environment from `requirements.txt` reproduces every output table and matrix exactly; worked example for any release point
 - [x] Second region: the core pipeline on the Gulf Stream box, with no region-specific code changes
 - [x] Hypothesis tests: H1 supported, H2 supported in 7 of 8 lane cells (drogued is a lower bound), H3 supported from 17.5 days (at 14 days the undrogued operator beats advection in 3 of 5 folds)
