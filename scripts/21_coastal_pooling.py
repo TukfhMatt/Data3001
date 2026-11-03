@@ -40,7 +40,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import xarray as xr
-from config import DROGUE_TYPES, MIN_DRIFTERS, grid_shape, operator_path, parse_args, region_prefix, setting_tag
+from config import DROGUE_TYPES, MIN_DRIFTERS, operator_path, parse_args, region_prefix, setting_tag
 
 from transport import (
     EXIT_LABELS,

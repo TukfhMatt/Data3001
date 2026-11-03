@@ -105,7 +105,7 @@ for d in HORIZONS:
           + "".join(f"{with_interval(p[n_cells + k], d, e):<18}" for k, e in enumerate(edges))
           + with_interval(p[n_cells + STRANDED], d, "stranded_any"))
 steps, fate = absorption(op)
-print(f"\nEventually: " + ", ".join(f"exit {e} {fate[state, k]:.0%}" for k, e in enumerate(edges))
+print("\nEventually: " + ", ".join(f"exit {e} {fate[state, k]:.0%}" for k, e in enumerate(edges))
       + f", stranded {fate[state, STRANDED]:.0%}. Mean time afloat in R: {steps[state] * TAU:.0f} days.")
 
 # ── 4. Which coast? ──────────────────────────────────────────────────────────

@@ -59,6 +59,8 @@ STEPS=(
   "27 ||27_decorrelation_time"
   "28 |*|28_oil_windage"
   "29 |*|29_spill_hindcasts"
+  "30 ||30_source_sink"
+  "31 |*|31_known_features"
 )
 
 # ── 2. Options ───────────────────────────────────────────────────────────────

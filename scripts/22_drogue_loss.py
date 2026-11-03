@@ -24,7 +24,7 @@ import matplotlib.pyplot as plt
 import xarray as xr
 
 from config import DROGUE_TYPES, _tag, box_tag, parse_args, region_prefix
-from transport import STRAND_MATCH_S, last_obs_index, move_indices, same_drogue, strand_times
+from transport import STRAND_MATCH_S, move_indices, same_drogue, strand_times
 
 args = parse_args(__doc__, lag=True)
 LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box

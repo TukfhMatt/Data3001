@@ -42,7 +42,7 @@ matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
 from config import OIL_WINDAGE_RANGE, grid_shape, operator_path, parse_args, setting_tag
-from transport import (COAST_LABELS, EXIT_LABELS, STRANDED, cell_centres, check_coast_box, load_operator, reliable,
+from transport import (COAST_LABELS, STRANDED, cell_centres, check_coast_box, load_operator, reliable,
                        release, propagate, resampled_counts, row_normalise, state_of, to_grid)
 
 args = parse_args(__doc__, grid=True, lag=True)

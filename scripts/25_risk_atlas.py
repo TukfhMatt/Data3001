@@ -57,7 +57,7 @@ if int(counts_file["n_states"]) != n_states:
 # ── 1. All outcomes of one matrix, from every release cell ───────────────────
 def powers(P, wanted):
     """Ocean rows of P^k for each k in wanted, by repeated squaring."""
-    out, base, k = {}, P, 1
+    base, k = P, 1
     pending = {w: None for w in wanted}
     while k <= max(wanted):
         for w in wanted:
