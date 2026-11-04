@@ -170,6 +170,14 @@ The core pipeline also runs on the Gulf Stream, box 80–40°W, 25–45°N, with
 - **Seasonality.** Drogued transport is seasonal beyond sampling noise in 5 of 6 season pairs, so the annual matrix is a weaker assumption here.
 - **Windage and stranding.** Undrogued stranding exceeds drogued with non-overlapping intervals in only 1 of 8 lane cells, against 7 of 8 in R, since the busiest lanes here mostly strand little either way.
 
+## Oil explorer
+
+`scripts/oil_explorer.py` builds a single web page, `figures/agulhas_oil_explorer_….html`: click anywhere in R and play the year to see where oil released there goes, in the matrix's own 3.5-day steps. It shows where the oil drifts and how much is left under the 14-day decay, and reports the drifters behind the cell, the atlas's 95% intervals at 1 week, 1 month and 1 year, the coast that receives the stranding and whether the result depends on the method. The page does the matrix steps itself, so it needs no server. Like the worked example, it only reads pipeline outputs. The time axis is days since release under average conditions, so it is not a forecast.
+
+```bash
+python scripts/oil_explorer.py
+```
+
 ## Worked example
 
 `scripts/worked_example.py` answers the project's question for any point: where does material released here go? It reads the pipeline's outputs and reports what is needed to judge the answer, namely the data behind the cell, 95% intervals, the coast and, for oil, whether the result depends on the method. It also saves a map.

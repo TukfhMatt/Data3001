@@ -26,7 +26,7 @@ A university data science project (Data3001) that builds a surface-transport ope
 
 ## Code conventions
 
-- Scripts are numbered in run order (`00_`, `01_`, …). New pipeline steps get the next number, and go in the `STEPS` list of `run_all.sh` after whatever they read; mark Agulhas-only steps there with `*`. `scripts/worked_example.py` only reads pipeline outputs, so it has no number.
+- Scripts are numbered in run order (`00_`, `01_`, …). New pipeline steps get the next number, and go in the `STEPS` list of `run_all.sh` after whatever they read; mark Agulhas-only steps there with `*`. `scripts/worked_example.py` and `scripts/oil_explorer.py` only read pipeline outputs, so they have no number.
 - `04_shipping_overlay.py` picks candidate release points only in cells that are reliable in both the drogued and undrogued matrices (not `flagged`, not `empty`), so both versions are compared at the same points; hotspots in unreliable cells are moved to the nearest such cell and the shift is printed. Keep that rule for any new release points. Read them through `config.release_points_path(box)`, which gives the box's points picked at the default grid and lag, whatever grid and lag the reading script runs on.
 - Each script starts with a docstring (title line "Agulhas Region — …", then what it does) and is split into numbered sections with headers such as `# ── 2. Pair each obs … ─────`.
 - Plots use `matplotlib.use("Agg")`, cartopy with a plain-matplotlib fallback, and are saved to `figures/` at 150 dpi. Scripts print a short summary and the saved paths.

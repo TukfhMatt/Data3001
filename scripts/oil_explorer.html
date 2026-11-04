@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agulhas Oil Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,500&display=swap" rel="stylesheet">
+<style>
+/* Layout: the map is the page, with the time control above it and the numbers for the current day beside it. */
+:root {
+  color-scheme: light;
+  --ink: #10263B; --muted: #4F6272; --page: #F1F5F7; --panel: #FFFFFF; --line: #D3DDE3; --accent: #1E5F8F;
+  --ocean: #DCEAF1; --land: #F4F2EB; --coast: #8A9BA8;
+  --warn: #B5461A; --warn-bg: #FBEFE8; --ok: #1F6B4F; --ok-bg: #E6F3EE;
+  --s-box: #eb6834; --s-east: #2a78d6; --s-west: #1baf7a; --s-sn: #eda100; --s-strand: #e87ba4; --s-gone: #B4C0C8;
+  --display: "Source Serif 4", Georgia, serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--page); color: var(--ink); font: 400 15px/1.45 var(--body); }
+main { max-width: 1760px; margin: 0 auto; padding: 16px 20px 28px; display: flex; flex-direction: column; gap: 12px; }
+h1 { font: 500 26px/1.15 var(--display); margin: 0; text-wrap: balance; }
+h2 { font: 600 15px/1.3 var(--body); margin: 0; }
+p { margin: 0; }
+button, select { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.top { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: baseline; justify-content: space-between; }
+.top p { color: var(--muted); }
+.controls { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; }
+.btn { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+.btn:hover { border-color: var(--accent); }
+#play { background: var(--ink); border-color: var(--ink); color: #fff; min-width: 76px; font-weight: 500; }
+.day { font-weight: 600; font-size: 18px; font-variant-numeric: tabular-nums; min-width: 92px; }
+.slider { flex: 1 1 260px; min-width: 200px; accent-color: var(--ink); }
+.jumps, .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.seg button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.layout { display: grid; grid-template-columns: max-content minmax(340px, 1fr); gap: 14px; align-items: start; }
+.map-wrap { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+canvas { display: block; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); cursor: crosshair; touch-action: manipulation; }
+.scale { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 13px; color: var(--muted); }
+.scale .bar { width: 200px; height: 10px; border-radius: 2px; background: linear-gradient(90deg, #F5C27F, #E58A3E, #B5461A, #6E2410, #2A0F06); }
+.scale .ticks { width: 200px; display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; font-size: 12px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.panel section { display: flex; flex-direction: column; gap: 6px; }
+.place { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.place strong { font: 500 21px/1.2 var(--display); }
+select { width: 100%; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); }
+.pill { display: inline-block; border-radius: 999px; padding: 1px 9px; font-size: 13px; font-weight: 500; }
+.pill.ok { color: var(--ok); background: var(--ok-bg); }
+.pill.warn { color: var(--warn); background: var(--warn-bg); }
+.notice { border-left: 3px solid var(--warn); background: var(--warn-bg); padding: 7px 10px; font-size: 14px; border-radius: 0 6px 6px 0; }
+.notice button { background: none; border: 0; padding: 0; color: var(--accent); text-decoration: underline; cursor: pointer; }
+.note { color: var(--muted); font-size: 13px; }
+table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: right; padding: 0 0 3px 8px; white-space: nowrap; }
+th:first-child { text-align: left; padding-left: 0; }
+td { padding: 3px 0 3px 8px; text-align: right; border-top: 1px solid var(--line); white-space: nowrap; }
+td:first-child { text-align: left; padding-left: 0; white-space: normal; }
+td.val { font-weight: 600; }
+td.int { color: var(--muted); }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 7px; vertical-align: 0; }
+.cbar { display: block; height: 4px; border-radius: 2px; background: var(--s-strand); margin-top: 3px; }
+svg { display: block; width: 100%; cursor: ew-resize; touch-action: pan-y; }
+svg text { font: 400 11px var(--body); fill: var(--muted); }
+#tip { position: fixed; z-index: 5; pointer-events: none; background: var(--ink); color: #fff; font-size: 13px; line-height: 1.35; padding: 5px 9px; border-radius: 5px; max-width: 260px; display: none; font-variant-numeric: tabular-nums; }
+.foot { color: var(--muted); font-size: 13px; line-height: 1.5; max-width: 110ch; }
+@media (max-width: 899px) {
+  main { padding: 12px 16px 24px; }
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="top">
+    <h1>Where does oil go from here?</h1>
+    <p id="intro"></p>
+  </div>
+  <div class="controls">
+    <button class="btn" id="play" type="button">Play</button>
+    <span class="day" id="day"></span>
+    <input class="slider" id="slider" type="range" min="0" step="1" aria-label="Days since release">
+    <div class="jumps" id="jumps"></div>
+    <div class="seg" role="group" aria-label="What the map shows">
+      <button id="mode-drift" type="button">Where it drifts</button>
+      <button id="mode-mass" type="button">Oil left after decay</button>
+    </div>
+  </div>
+  <div class="layout" id="layout">
+    <div class="map-wrap">
+      <canvas id="map" tabindex="0" aria-label="Map of the Agulhas box. Click the sea to choose a release point, or use the arrow keys to move it one cell."></canvas>
+      <div class="scale">
+        <div><div class="bar"></div><div class="ticks"><span>0.01%</span><span>0.1%</span><span>1%</span><span>10%</span><span>100%</span></div></div>
+        <span id="scale-label"></span>
+        <span>Small hollow dots mark thin cells.</span>
+      </div>
+    </div>
+    <div class="panel">
+      <section>
+        <div class="place"><strong id="place"></strong><span id="pill"></span></div>
+        <label class="note" for="preset">Jump to a port or shipping lane</label>
+        <select id="preset"></select>
+        <div id="notices" style="display:flex;flex-direction:column;gap:6px"></div>
+      </section>
+      <section>
+        <h2 id="at-day"></h2>
+        <table><thead><tr><th>Share of the release</th><th>Now</th><th id="int-head">95% interval</th></tr></thead><tbody id="rows"></tbody></table>
+        <p class="note" id="int-note"></p>
+      </section>
+      <section>
+        <h2>Over the year</h2>
+        <div id="chart"></div>
+      </section>
+      <section>
+        <h2 id="coast-title">Which coast</h2>
+        <table><thead><tr><th>Coast</th><th id="coast-now">Now</th><th id="coast-later">Eventually</th></tr></thead><tbody id="coasts"></tbody></table>
+        <p class="note" id="strand-days"></p>
+      </section>
+    </div>
+  </div>
+  <p class="foot" id="foot"></p>
+</main>
+<div id="tip"></div>
+<script>
+const DATA = /*DATA*/null;
+
+// ── Decode the matrix ───────────────────────────────────────────────────────
+function bytes(b64) {
+  const s = atob(b64), out = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
+  return out.buffer;
+}
+const rowStart = new Uint32Array(bytes(DATA.rowStart));
+const col = new Uint16Array(bytes(DATA.col));
+const val = new Float64Array(bytes(DATA.val));
+const N = DATA.nCells, NS = DATA.nStates, TAU = DATA.tau, MAX = DATA.maxSteps, DECAY = DATA.decayDays;
+const NE = DATA.edges.length, NC = DATA.coasts.length;
+const [LON0, LON1, LAT0, LAT1] = DATA.box;
+const stateOfFlat = new Map(DATA.cellFlat.map((f, s) => [f, s]));
+const cellLon = DATA.cellFlat.map(f => LON0 + (f % DATA.nLon + 0.5) * DATA.res);
+const cellLat = DATA.cellFlat.map(f => LAT0 + (Math.floor(f / DATA.nLon) + 0.5) * DATA.res);
+
+// ── The sums: step a release forward, as p @ P ──────────────────────────────
+function step(p) {
+  const q = new Float64Array(NS);
+  for (let i = 0; i < NS; i++) {
+    const pi = p[i];
+    if (pi === 0) continue;
+    for (let k = rowStart[i]; k < rowStart[i + 1]; k++) q[col[k]] += pi * val[k];
+  }
+  return q;
+}
+// Every step's distribution, with the oil mass left under exp(−t / decay). Mass
+// that strands or leaves R keeps what it had when it got there, as in 24.
+function trajectory(state) {
+  const dist = [], mass = [];
+  let p = new Float64Array(NS);
+  p[state] = 1;
+  dist.push(p);
+  const absorbed = new Float64Array(NE + NC);
+  mass.push({ absorbed: absorbed.slice(), decay: 1 });
+  for (let s = 1; s <= MAX; s++) {
+    const q = step(p), decay = Math.exp(-s * TAU / DECAY);
+    for (let k = 0; k < NE + NC; k++) absorbed[k] += (q[N + k] - p[N + k]) * decay;
+    dist.push(q);
+    mass.push({ absorbed: absorbed.slice(), decay });
+    p = q;
+  }
+  return { dist, mass };
+}
+// The numbers one view shows at one step: shares of the release
+function summary(tr, s, view) {
+  const p = tr.dist[s];
+  let inBox = 0;
+  for (let i = 0; i < N; i++) inBox += p[i];
+  const src = view === "mass" ? tr.mass[s].absorbed : p.subarray(N);
+  const edge = {};
+  DATA.edges.forEach((e, k) => { edge[e] = src[k]; });
+  const coast = Array.from(src.slice(NE, NE + NC));
+  const stranded = coast.reduce((a, b) => a + b, 0);
+  const afloat = view === "mass" ? inBox * tr.mass[s].decay : inBox;
+  const gone = view === "mass" ? Math.max(0, 1 - afloat - stranded - DATA.edges.reduce((a, e) => a + edge[e], 0)) : 0;
+  return { afloat, edge, coast, stranded, gone };
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+const el = id => document.getElementById(id);
+const defaultPoint = DATA.points.find(p => p.name === "Durban") || DATA.points[0];
+const state = { cell: stateAt(defaultPoint.lon, defaultPoint.lat), step: Math.round(30 / TAU), view: "drift", tr: null, note: "", timer: null, hover: null };
+function stateAt(lon, lat) {
+  if (lon < LON0 || lon >= LON1 || lat < LAT0 || lat >= LAT1) return -1;
+  const f = Math.floor((lat - LAT0) / DATA.res) * DATA.nLon + Math.floor((lon - LON0) / DATA.res);
+  return stateOfFlat.has(f) ? stateOfFlat.get(f) : -1;
+}
+function km(lon0, lat0, lon1, lat1) {
+  return Math.hypot((lon1 - lon0) * 111.32 * Math.cos(lat0 * Math.PI / 180), (lat1 - lat0) * 110.57);
+}
+function nearest(lon, lat, only) {
+  let best = -1, bestKm = Infinity;
+  for (let s = 0; s < N; s++) {
+    if (only && !only(s)) continue;
+    const d = km(lon, lat, cellLon[s], cellLat[s]);
+    if (d < bestKm) { bestKm = d; best = s; }
+  }
+  return { state: best, km: bestKm };
+}
+const fmtPlace = (lon, lat) => `${Math.abs(lon).toFixed(1)}°${lon >= 0 ? "E" : "W"} ${Math.abs(lat).toFixed(1)}°${lat >= 0 ? "N" : "S"}`;
+const pct = x => x <= 0 ? "0%" : x < 0.001 ? "<0.1%" : x < 0.1 ? (x * 100).toFixed(1) + "%" : Math.round(x * 100) + "%";
+const milleRange = (lo, hi) => { if (hi === 0) return "<0.1%"; const f = m => m < 10 && m > 0 ? (m / 10).toFixed(1) : String(Math.round(m / 10)); return `${f(lo)}–${f(hi)}%`; };
+const dayText = s => { const d = s * TAU; return d % 1 ? d.toFixed(1) : String(d); };
+
+// ── Map ─────────────────────────────────────────────────────────────────────
+const canvas = el("map"), ctx = canvas.getContext("2d");
+const M = { l: 26, r: 26, t: 24, b: 24 };
+const ASPECT = (LAT1 - LAT0) / ((LON1 - LON0) * Math.cos(30 * Math.PI / 180));
+const geom = { w: 0, h: 0, pw: 0, ph: 0 };
+const X = lon => M.l + (lon - LON0) / (LON1 - LON0) * geom.pw;
+const Y = lat => M.t + (LAT1 - lat) / (LAT1 - LAT0) * geom.ph;
+const RAMP = [[245, 194, 127], [229, 138, 62], [181, 70, 26], [110, 36, 16], [42, 15, 6]];
+function rampColour(share) {
+  const t = Math.min(1, Math.max(0, (Math.log10(share) + 4) / 4)) * (RAMP.length - 1);
+  const i = Math.min(RAMP.length - 2, Math.floor(t)), f = t - i;
+  const c = RAMP[i].map((v, k) => Math.round(v + (RAMP[i + 1][k] - v) * f));
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function layout() {
+  const avail = el("layout").clientWidth;
+  const narrow = window.innerWidth < 900;
+  let w = narrow ? avail : avail - 354;
+  if (!narrow) {
+    const maxH = Math.max(380, window.innerHeight - 190);
+    w = Math.min(w, (maxH - M.t - M.b) / ASPECT + M.l + M.r);
+  }
+  w = Math.floor(Math.max(280, w));
+  geom.w = w; geom.pw = w - M.l - M.r; geom.ph = geom.pw * ASPECT; geom.h = Math.ceil(geom.ph + M.t + M.b);
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = w * dpr; canvas.height = geom.h * dpr;
+  canvas.style.width = w + "px"; canvas.style.height = geom.h + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+const LABELS = [["South Africa", 23.5, -30.2], ["Mozambique", 34.6, -17.6], ["Madagascar", 46.8, -19.5], ["Namibia", 17.5, -22.5], ["Zimbabwe", 29.5, -19.3], ["Botswana", 23.5, -23]];
+function drawMap() {
+  const { pw, ph } = geom, c = ctx, cs = { ocean: css("--ocean"), land: css("--land"), coast: css("--coast"), ink: css("--ink"), muted: css("--muted"), panel: css("--panel") };
+  c.clearRect(0, 0, geom.w, geom.h);
+  c.fillStyle = cs.ocean; c.fillRect(M.l, M.t, pw, ph);
+  const p = state.tr.dist[state.step], decay = state.view === "mass" ? state.tr.mass[state.step].decay : 1;
+  for (let s = 0; s < N; s++) {
+    const v = p[s] * decay;
+    if (v < 1e-4) continue;
+    const x0 = X(cellLon[s] - DATA.res / 2), x1 = X(cellLon[s] + DATA.res / 2), y0 = Y(cellLat[s] + DATA.res / 2), y1 = Y(cellLat[s] - DATA.res / 2);
+    c.fillStyle = rampColour(v);
+    c.fillRect(Math.floor(x0), Math.floor(y0), Math.ceil(x1) - Math.floor(x0), Math.ceil(y1) - Math.floor(y0));
+  }
+  c.save(); c.beginPath(); c.rect(M.l, M.t, pw, ph); c.clip();
+  c.strokeStyle = "rgba(16,38,59,0.13)"; c.lineWidth = 1; c.beginPath();
+  for (let lon = 20; lon < LON1; lon += 10) { c.moveTo(X(lon), M.t); c.lineTo(X(lon), M.t + ph); }
+  for (let lat = -40; lat < LAT1; lat += 10) { c.moveTo(M.l, Y(lat)); c.lineTo(M.l + pw, Y(lat)); }
+  c.stroke();
+  c.fillStyle = cs.land; c.strokeStyle = cs.coast; c.lineWidth = 0.8; c.beginPath();
+  for (const ring of DATA.land) {
+    ring.forEach((pt, i) => { i ? c.lineTo(X(pt[0]), Y(pt[1])) : c.moveTo(X(pt[0]), Y(pt[1])); });
+    c.closePath();
+  }
+  c.fill("evenodd"); c.stroke();
+  c.restore();
+  // Thin cells
+  c.strokeStyle = cs.muted; c.lineWidth = 1;
+  for (let s = 0; s < N; s++) if (!DATA.reliable[s]) { c.beginPath(); c.arc(X(cellLon[s]), Y(cellLat[s]), 2.1, 0, 7); c.stroke(); }
+  // Labels
+  c.textAlign = "center"; c.textBaseline = "middle";
+  c.font = `500 ${geom.w < 520 ? 10 : 12}px ${css("--body")}`; c.fillStyle = cs.muted;
+  for (const [t, lon, lat] of LABELS) if (geom.w >= 520 || ["South Africa", "Madagascar"].includes(t)) c.fillText(t, X(lon), Y(lat));
+  c.font = `400 11px ${css("--body")}`; c.textBaseline = "bottom"; c.textAlign = "left";
+  for (let lon = 20; lon < LON1; lon += 10) c.fillText(`${lon}°E`, X(lon) + 3, M.t + ph - 2);
+  c.textBaseline = "bottom";
+  for (let lat = -40; lat < LAT1; lat += 10) c.fillText(`${-lat}°S`, M.l + 3, Y(lat) - 1);
+  c.strokeStyle = cs.ink; c.lineWidth = 1; c.strokeRect(M.l + 0.5, M.t + 0.5, pw - 1, ph - 1);
+  // The release: a white halo keeps it visible on dark oil
+  const rx = X(cellLon[state.cell]), ry = Y(cellLat[state.cell]);
+  c.lineWidth = 4; c.strokeStyle = "#fff"; c.beginPath(); c.arc(rx, ry, 8, 0, 7); c.stroke();
+  c.lineWidth = 2; c.strokeStyle = cs.ink; c.beginPath(); c.arc(rx, ry, 8, 0, 7); c.stroke();
+  // Exits, on the edge they cross
+  const sum = summary(state.tr, state.step, state.view);
+  c.fillStyle = cs.ink; c.font = `500 13px ${css("--body")}`; c.textAlign = "center"; c.textBaseline = "middle";
+  c.fillText(`Left north ${pct(sum.edge.N)}`, M.l + pw / 2, M.t / 2);
+  c.fillText(`Left south ${pct(sum.edge.S)}`, M.l + pw / 2, M.t + ph + M.b / 2);
+  c.save(); c.translate(M.l / 2, M.t + ph / 2); c.rotate(-Math.PI / 2); c.fillText(`Left west ${pct(sum.edge.W)}`, 0, 0); c.restore();
+  c.save(); c.translate(M.l + pw + M.r / 2, M.t + ph / 2); c.rotate(Math.PI / 2); c.fillText(`Left east ${pct(sum.edge.E)}`, 0, 0); c.restore();
+}
+function lonLatAt(ev) {
+  const r = canvas.getBoundingClientRect();
+  const lon = LON0 + (ev.clientX - r.left - M.l) / geom.pw * (LON1 - LON0);
+  const lat = LAT1 - (ev.clientY - r.top - M.t) / geom.ph * (LAT1 - LAT0);
+  return [lon, lat];
+}
+
+// ── Panel ───────────────────────────────────────────────────────────────────
+const ROWS = [
+  { key: "afloat", label: "Still in the box", colour: "--s-box", atlas: "in_R" },
+  { key: "E", label: "Left east", colour: "--s-east", atlas: "E" },
+  { key: "W", label: "Left west", colour: "--s-west", atlas: "W" },
+  { key: "S", label: "Left south", colour: "--s-sn", atlas: "S" },
+  { key: "N", label: "Left north", colour: "--s-sn", atlas: "N" },
+  { key: "stranded", label: "Stranded", colour: "--s-strand", atlas: "stranded_any" },
+];
+const SHORT_COAST = ["Atlantic and Cape", "South Africa, south and east", "Southern Mozambique", "Central and northern Mozambique", "West and south Madagascar", "East Madagascar"];
+function valueOf(sum, key) { return key === "afloat" ? sum.afloat : key === "stranded" ? sum.stranded : key === "gone" ? sum.gone : sum.edge[key]; }
+function drawPanel() {
+  const s = state.cell, sum = summary(state.tr, state.step, state.view), iv = state.view === "drift" ? DATA.intervals[state.step] : null;
+  const preset = DATA.points.find(p => stateAt(p.lon, p.lat) === s);
+  el("place").textContent = preset && !preset.name.startsWith("Lane") ? `${preset.name}, ${fmtPlace(cellLon[s], cellLat[s])}` : fmtPlace(cellLon[s], cellLat[s]);
+  el("preset").value = preset ? preset.name : "";
+  const n = DATA.drifters[s], ok = DATA.reliable[s];
+  el("pill").innerHTML = ok ? `<span class="pill ok">Reliable: ${n} drifters</span>` : `<span class="pill warn">Thin: ${DATA.empty[s] ? "no moves of its own" : n + (n === 1 ? " drifter" : " drifters")}</span>`;
+  const notices = [];
+  if (state.note) notices.push(`<div class="notice" style="border-left-color:var(--accent);background:var(--page)">${state.note}</div>`);
+  if (!ok) {
+    const near = nearest(cellLon[s], cellLat[s], c => DATA.reliable[c]);
+    const why = DATA.empty[s] ? "No drifter left this cell, so its row borrows from the cells around it." : `Fewer than ${DATA.minDrifters} drifters left this cell.`;
+    notices.push(`<div class="notice">${why} Treat these numbers as very uncertain. <button type="button" data-cell="${near.state}">Use the nearest reliable cell, ${fmtPlace(cellLon[near.state], cellLat[near.state])}, ${Math.round(near.km)} km away</button></div>`);
+  }
+  if (DATA.methodTvd[s] > DATA.disagreeTvd) {
+    notices.push(`<div class="notice">This result depends on the method. At 30 days, the oil matrix and its check differ by a total variation distance of ${DATA.methodTvd[s].toFixed(2)}, above the ${DATA.disagreeTvd} limit.</div>`);
+  }
+  el("notices").innerHTML = notices.join("");
+  el("at-day").textContent = `Day ${dayText(state.step)} after release`;
+  const rows = state.view === "mass" ? ROWS.concat([{ key: "gone", label: "Weathered away", colour: "--s-gone" }]) : ROWS;
+  el("rows").innerHTML = rows.map(r => {
+    const range = iv && r.atlas ? milleRange(iv[r.atlas].lo[s], iv[r.atlas].hi[s]) : "";
+    const label = state.view === "mass" && r.key === "afloat" ? "Afloat in the box" : r.label;
+    return `<tr><td><span class="sw" style="background:var(${r.colour})"></span>${label}</td><td class="val">${pct(valueOf(sum, r.key))}</td><td class="int">${range}</td></tr>`;
+  }).join("");
+  el("int-head").textContent = state.view === "drift" ? "95% interval" : "";
+  el("int-note").textContent = state.view === "mass"
+    ? `Oil left under exp(−t / ${DECAY} d), a working value. Oil that strands or leaves the box counts at the mass it had when it got there.`
+    : "Intervals appear at the 1 week, 1 month and 1 year buttons only (days 7, 31.5 and 364, the nearest whole steps).";
+  // Coasts
+  const later = state.view === "drift" ? DATA.coasts.map(c => DATA.eventual[c].est[s] / 1000) : summary(state.tr, MAX, "mass").coast;
+  const top = Math.max(0.01, ...later, ...sum.coast);
+  el("coast-now").textContent = `Day ${dayText(state.step)}`;
+  el("coast-later").textContent = state.view === "drift" ? "Eventually" : `Day ${dayText(MAX)}`;
+  el("coasts").innerHTML = DATA.coasts.map((c, k) => {
+    const range = state.view === "drift" ? ` <span style="color:var(--muted);font-weight:400">(${milleRange(DATA.eventual[c].lo[s], DATA.eventual[c].hi[s])})</span>` : "";
+    return `<tr><td>${SHORT_COAST[k]}<span class="cbar" style="width:${Math.max(sum.coast[k] > 0 ? 1 : 0, sum.coast[k] / top * 100)}%"></span></td><td class="val">${pct(sum.coast[k])}</td><td>${pct(later[k])}${range}</td></tr>`;
+  }).join("");
+  const d = DATA.daysToStrand[s];
+  el("strand-days").textContent = state.view === "drift" && d ? `Of what eventually strands, the average trip takes ${d[0]} days (${d[1]}–${d[2]}).` : "";
+  // Top controls
+  el("day").textContent = `Day ${dayText(state.step)}`;
+  el("slider").value = state.step;
+  el("mode-drift").setAttribute("aria-pressed", state.view === "drift");
+  el("mode-mass").setAttribute("aria-pressed", state.view === "mass");
+  el("scale-label").textContent = state.view === "drift" ? "Share of the release in each 1° cell" : "Oil mass left in each 1° cell, as a share of the release";
+}
+
+// ── Chart: a stacked area over the year, with a cursor at the current day ───
+const CH = { h: 150, l: 40, r: 8, t: 6, b: 20 };
+let chartSeries = null;
+function buildChart() {
+  const box = el("chart"), w = Math.max(240, box.clientWidth), pw = w - CH.l - CH.r, ph = CH.h - CH.t - CH.b;
+  const all = [];
+  for (let s = 0; s <= MAX; s++) all.push(summary(state.tr, s, state.view));
+  const groups = [
+    { colour: "--s-box", get: v => v.afloat }, { colour: "--s-east", get: v => v.edge.E }, { colour: "--s-west", get: v => v.edge.W },
+    { colour: "--s-sn", get: v => v.edge.S + v.edge.N }, { colour: "--s-strand", get: v => v.stranded },
+  ];
+  if (state.view === "mass") groups.push({ colour: "--s-gone", get: v => v.gone });
+  const x = s => CH.l + s / MAX * pw, y = v => CH.t + (1 - v) * ph;
+  const base = new Float64Array(MAX + 1);
+  let paths = "";
+  for (const g of groups) {
+    let top = "", bottom = "";
+    for (let s = 0; s <= MAX; s++) top += `${s ? "L" : "M"}${x(s).toFixed(1)} ${y(base[s] + g.get(all[s])).toFixed(1)}`;
+    for (let s = MAX; s >= 0; s--) bottom += `L${x(s).toFixed(1)} ${y(base[s]).toFixed(1)}`;
+    for (let s = 0; s <= MAX; s++) base[s] += g.get(all[s]);
+    paths += `<path d="${top}${bottom}Z" fill="var(${g.colour})" stroke="var(--panel)" stroke-width="1"/>`;
+  }
+  let axes = "";
+  for (const v of [0, 0.5, 1]) axes += `<line x1="${CH.l}" x2="${w - CH.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--line)"/><text x="${CH.l - 5}" y="${y(v) + 4}" text-anchor="end">${v * 100}%</text>`;
+  for (const d of [0, 90, 180, 270, 360]) axes += `<text x="${x(d / TAU)}" y="${CH.h - 5}" text-anchor="${d === 0 ? "start" : d === 360 ? "end" : "middle"}">${d} d</text>`;
+  box.innerHTML = `<svg id="chart-svg" viewBox="0 0 ${w} ${CH.h}" height="${CH.h}" role="img" aria-label="Stacked area of where the release is on each day over the year">${paths}${axes}<line id="cursor" y1="${CH.t}" y2="${CH.t + ph}" stroke="var(--ink)" stroke-width="2"/></svg>`;
+  chartSeries = { all, x, w, pw };
+  placeCursor();
+  const svg = el("chart-svg");
+  const stepAt = ev => { const r = svg.getBoundingClientRect(); return Math.max(0, Math.min(MAX, Math.round((ev.clientX - r.left - CH.l) / pw * MAX))); };
+  svg.addEventListener("pointerdown", ev => { stopPlay(); svg.setPointerCapture(ev.pointerId); setStep(stepAt(ev)); });
+  svg.addEventListener("pointermove", ev => {
+    const s = stepAt(ev);
+    if (ev.buttons) setStep(s);
+    const v = all[s], names = [["In box", v.afloat], ["East", v.edge.E], ["West", v.edge.W], ["South or north", v.edge.S + v.edge.N], ["Stranded", v.stranded]];
+    if (state.view === "mass") names.push(["Weathered", v.gone]);
+    showTip(ev, `<strong>Day ${dayText(s)}</strong><br>` + names.map(([k, a]) => `${k} ${pct(a)}`).join("<br>"));
+  });
+  svg.addEventListener("pointerleave", hideTip);
+}
+function placeCursor() {
+  const c = el("cursor");
+  if (c && chartSeries) { const x = chartSeries.x(state.step); c.setAttribute("x1", x); c.setAttribute("x2", x); }
+}
+const tip = el("tip");
+function showTip(ev, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const r = tip.getBoundingClientRect();
+  tip.style.left = Math.min(window.innerWidth - r.width - 8, ev.clientX + 14) + "px";
+  tip.style.top = Math.min(window.innerHeight - r.height - 8, ev.clientY + 14) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+
+// ── Interaction ─────────────────────────────────────────────────────────────
+function render() { drawMap(); drawPanel(); placeCursor(); }
+function setStep(s) { state.step = s; render(); }
+function setCell(cell, note) {
+  state.cell = cell; state.note = note || ""; state.tr = trajectory(cell);
+  drawPanel(); buildChart(); drawMap();
+}
+function setView(v) { state.view = v; drawPanel(); buildChart(); drawMap(); }
+function stopPlay() { if (state.timer) { clearInterval(state.timer); state.timer = null; el("play").textContent = "Play"; } }
+function startPlay() {
+  if (state.step >= MAX) setStep(0);
+  el("play").textContent = "Pause";
+  state.timer = setInterval(() => { if (state.step >= MAX) { stopPlay(); return; } setStep(state.step + 1); }, 150);
+}
+el("play").addEventListener("click", () => state.timer ? stopPlay() : startPlay());
+el("slider").max = MAX;
+el("slider").addEventListener("input", ev => { stopPlay(); setStep(+ev.target.value); });
+[["Release", 0], ["1 week", 7], ["1 month", 30], ["3 months", 91], ["6 months", 182], ["1 year", 365]].forEach(([label, d]) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "btn"; b.textContent = label;
+  b.addEventListener("click", () => { stopPlay(); setStep(Math.round(d / TAU)); });
+  el("jumps").appendChild(b);
+});
+el("mode-drift").addEventListener("click", () => setView("drift"));
+el("mode-mass").addEventListener("click", () => setView("mass"));
+el("notices").addEventListener("click", ev => { const c = ev.target.getAttribute && ev.target.getAttribute("data-cell"); if (c !== null && c !== undefined) setCell(+c); });
+const sel = el("preset");
+sel.innerHTML = `<option value="">Point chosen on the map</option><optgroup label="Ports">${DATA.points.filter(p => p.kind === "hotspot").map(p => `<option value="${p.name}">${p.name}</option>`).join("")}</optgroup><optgroup label="Shipping lanes">${DATA.points.filter(p => p.kind !== "hotspot").map(p => `<option value="${p.name}">${p.name}</option>`).join("")}</optgroup>`;
+sel.addEventListener("change", () => { const p = DATA.points.find(q => q.name === sel.value); if (p) setCell(stateAt(p.lon, p.lat)); });
+canvas.addEventListener("click", ev => {
+  const [lon, lat] = lonLatAt(ev);
+  if (lon < LON0 || lon >= LON1 || lat < LAT0 || lat >= LAT1) return;
+  const hit = stateAt(lon, lat);
+  if (hit >= 0) { setCell(hit); return; }
+  const near = nearest(lon, lat);
+  if (near.km <= 150) setCell(near.state, `No ocean cell at that point, so this uses the nearest, ${Math.round(near.km)} km away.`);
+  else { state.note = `That point is ${Math.round(near.km)} km from the nearest ocean cell, so nothing was released. Click the sea instead.`; drawPanel(); }
+});
+canvas.addEventListener("pointermove", ev => {
+  const [lon, lat] = lonLatAt(ev), s = stateAt(lon, lat);
+  if (s < 0) { hideTip(); return; }
+  const v = state.tr.dist[state.step][s] * (state.view === "mass" ? state.tr.mass[state.step].decay : 1);
+  showTip(ev, `<strong>${fmtPlace(cellLon[s], cellLat[s])}</strong><br>${pct(v)} of the release here on day ${dayText(state.step)}<br>${DATA.reliable[s] ? `${DATA.drifters[s]} drifters` : (DATA.empty[s] ? "Thin: no moves of its own" : `Thin: ${DATA.drifters[s]} drifters`)}. Click to release here.`);
+});
+canvas.addEventListener("pointerleave", hideTip);
+canvas.addEventListener("keydown", ev => {
+  const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[ev.key];
+  if (!d) return;
+  ev.preventDefault();
+  const s = stateAt(cellLon[state.cell] + d[0] * DATA.res, cellLat[state.cell] + d[1] * DATA.res);
+  if (s >= 0) setCell(s);
+});
+new ResizeObserver(() => { layout(); drawMap(); buildChart(); }).observe(el("layout"));
+window.addEventListener("resize", () => { layout(); drawMap(); });
+
+el("intro").textContent = `Click the sea, then play the year. Based on drifters from ${DATA.years[0]}–${DATA.years[1]}, with ${(DATA.alphaOil * 100).toFixed(1)}% of the wind added for oil.`;
+el("foot").textContent = `Read this as a likely spread under average conditions, not a forecast: the time axis is days since release, with no season, storm or wind shift in it. `
+  + `Each step is ${TAU} days on a ${DATA.res}° grid (about 100 km), and repeated steps spread material more smoothly than a real slick would. Oil that leaves the box is no longer tracked and cannot come back. `
+  + `"Where it drifts" follows the oil without weathering; "Oil left after decay" uses a working ${DECAY}-day decay. `
+  + `Data: NOAA Global Drifter Program and ERA5 winds. Results are weakest close to the coast, and the 95% intervals come from resampling whole drifters and are not corrected for the number of comparisons.`;
+
+state.tr = trajectory(state.cell);
+window.oilExplorer = { trajectory, summary, stateAt, DATA };
+layout(); drawPanel(); buildChart(); drawMap();
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { drawMap(); });
+</script>
+</body>
+</html>
