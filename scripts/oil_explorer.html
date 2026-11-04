@@ -466,7 +466,7 @@ canvas.addEventListener("keydown", ev => {
 new ResizeObserver(() => { layout(); drawMap(); buildChart(); }).observe(el("layout"));
 window.addEventListener("resize", () => { layout(); drawMap(); });
 
-el("intro").textContent = `Click the sea, then play the year. Based on drifters from ${DATA.years[0]}–${DATA.years[1]}, with ${(DATA.alphaOil * 100).toFixed(1)}% of the wind added for oil.`;
+el("intro").textContent = `Click the sea, then play the year. Based on undrogued drifters from ${DATA.years[0]}–${DATA.years[1]}, which already carry about ${(DATA.alphaUndrogued * 100).toFixed(1)}% of the wind, moved by a further ${(DATA.alphaAdded * 100).toFixed(1)}% to reach ${(DATA.alphaOil * 100).toFixed(1)}% for oil.`;
 el("foot").textContent = `Read this as a likely spread under average conditions, not a forecast: the time axis is days since release, with no season, storm or wind shift in it. `
   + `Each step is ${TAU} days on a ${DATA.res}° grid (about 100 km), and repeated steps spread material more smoothly than a real slick would. Oil that leaves the box is no longer tracked and cannot come back. `
   + `"Where it drifts" follows the oil without weathering; "Oil left after decay" uses a working ${DECAY}-day decay. `

@@ -106,6 +106,7 @@ data = {
     "reliable": reliable(op)[:n_cells].astype(int).tolist(),
     "methodTvd": np.round(method_tvd, 3).tolist(), "disagreeTvd": DISAGREE_TVD, "minDrifters": MIN_DRIFTERS,
     "decayDays": float(op["decay_days"]), "alphaOil": float(op["alpha_oil"]),
+    "alphaUndrogued": float(op["alpha_undrogued"]), "alphaAdded": float(op["alpha_added"]),
     "years": op["years"].astype(int).tolist(),
     "maxSteps": int(round(HORIZONS[-1] / TAU)),
     "intervals": intervals, "eventual": eventual, "daysToStrand": days_to_strand,
