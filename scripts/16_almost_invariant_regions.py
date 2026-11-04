@@ -117,7 +117,7 @@ for name in DROGUE_TYPES:
     steps = {dd: int(round(dd / TAU)) for dd in CHECK_DAYS}
     print(f"\n{name}: {len(idx)} reliable cells; leading eigenvalues "
           + ", ".join(f"{v:.4f}" for v in vals)
-          + f"\n  gaps after the 2nd–7th: " + ", ".join(f"{g:.4f}" for g in gaps[1:7])
+          + "\n  gaps after the 2nd–7th: " + ", ".join(f"{g:.4f}" for g in gaps[1:7])
           + f"; {k} regions")
     print(f"  {'region':>6}{'cells':>7}{'centre':>16}{'1 step':>8}{'30 d':>7}{'365 d':>7}{'band 30 d':>11}")
     for g in range(k):

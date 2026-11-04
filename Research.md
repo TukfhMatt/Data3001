@@ -76,7 +76,7 @@ Whole-box structure:
 - Where R holds material: the share released in each cell still afloat in R after a year; the top 10% of reliable cells are retention hotspots, checked across grids and with a drifter bootstrap.
 - Where R loses material: residence time (expected time before leaving or stranding) and the eventual fate (which edge, or stranded) of each cell, both exact from the absorbing chain's fundamental matrix N = (I − Q)⁻¹.
 - Which parts keep material to themselves: spectral clustering of the symmetrised transition matrix → almost-invariant regions, checked with the directional P against longitude bands of the same sizes.
-- Source vs sink cells: row and column sums of P.
+- Source vs sink cells: every row of P sums to 1, so the column sums show which cells gather or shed material over one step (`scripts/30_source_sink.py`).
 - Coastal support: neighbouring thin coastal cells are grouped into short coastal segments for coastal summaries and near-shore exposure.
 - Stranding by coast: the stranded state is split into six named coasts by where drifters ran aground, so stranding can be reported per coast with intervals.
 - Traffic-weighted exposure: releases spread over R in proportion to shipping density, for all traffic and six routes; which coasts are exposed, from which routes and how soon.
@@ -89,7 +89,7 @@ Validation:
 - Four seasonal operators (DJF, MAM, JJA and SON) against the annual operator, with 2° used as a robustness check where 1° drogued seasonal support is sparse.
 - Chapman–Kolmogorov consistency: compare `P(3.5 d)^2` with transitions estimated directly at 7 days.
 - Drifter coverage over time (temporal plot), so no few years dominate the matrix.
-- Known features: current path, retroflection, rings heading into the Atlantic.
+- Known features: current path, retroflection, rings heading into the Atlantic, set against ranges fixed before the script first ran (`scripts/31_known_features.py`).
 
 
 Final output:
@@ -337,7 +337,7 @@ Progress:
   - Outputs: `data/risk_atlas_…csv` (232,800 rows), `figures/agulhas_risk_atlas_…png`.
 
 - [x] Packaging — `run_all.sh` runs every step in order, with logs, resuming with `--from`, and the core steps on another region with `--box` and `--data`. `scripts/worked_example.py` answers the project's question for any release point, with the cell's reliability, intervals, coast and method flag.
-  - Reproducibility test: a fresh clone in a fresh environment built from `requirements.txt`, given only the three raw inputs (drifter subset, ERA5 winds, shipping zip), ran the 34 steps that are not downloads and reproduced all 115 output tables and matrices exactly (numeric values within 1e-9; text in the tables identical). The downloads themselves were not repeated in this test. Results depend on the GDP store at fetch time.
+  - Reproducibility test: a fresh clone in a fresh environment built from `requirements.txt`, given only the three raw inputs (drifter subset, ERA5 winds, shipping zip), ran the 34 steps that are not downloads and reproduced all 115 output tables and matrices exactly (numeric values within 1e-9; text in the tables identical). The downloads themselves were not repeated in this test. `30` and `31` were checked by running them twice in place, which gave identical tables. Results depend on the GDP store at fetch time, so the README records each subset's counts and SHA-256.
   - The Gulf Stream run through `run_all.sh` also reproduced its 45 tables.
 
 - [x] Spill hindcasts — `scripts/29_spill_hindcasts.py` (oil at 3.5%, 1°, τ = 3.5 d; 1,000 resamples of whole drifters). A check of coast and timescale: the matrix holds average conditions over 1995–2022, so it cannot reproduce one event's winds, and one event can neither confirm nor reject a probability.
@@ -379,6 +379,27 @@ Progress:
   - Chapman–Kolmogorov: 5.1% / 2.1% of rows are above their 95% noise level, so the Markov assumption holds as in R. The decorrelation time is 1.37 d drogued and 1.40 d undrogued, so τ = 3.5 d suits this box too.
   - Windage and stranding (`26`): undrogued stranding exceeds drogued with non-overlapping intervals in only 1 of 8 lane cells, against 7 of 8 in R. The result in R is therefore not general.
   - Differences from R: long-run results depend on the grid (mean time in the box 608 → 478 → 350 days drogued and 427 → 379 → 305 days undrogued from 0.5° to 1° to 2°, against about 40 days of spread in R), and drogued transport is seasonal beyond sampling noise in 5 of 6 season pairs (undrogued 6 of 6; drogued 0 of 6 in R). The 1° annual baseline chosen for R therefore should not be assumed elsewhere without rechecking.
+
+- [x] Known features — `scripts/31_known_features.py` (1°, τ = 3.5 d; drogued / undrogued, 95% intervals from 1,000 resamples of whole drifters). The drogued result is the test, since wind also moves undrogued drifters. The rules were fixed before the script first ran, though the speed threshold was set knowing the maximum mean current from `04` (1.23 m/s drogued).
+
+    | Feature | Rule | Drogued | Undrogued |
+    |---|---|---|---|
+    | Fastest mean current on the core rows (27–34°S) | at least 1 m/s | 1.11 m/s (0.96–1.53) | 1.34 m/s (1.22–1.67) |
+    | Direction of those cells | south-west, 180–270° | 219° (215–221) | 220° (218–222) |
+    | Drift from Durban over 7 days | south-west, 180–270° | 215° (210–220) | 216° (213–219) |
+    | End of the westward jet (retroflection) | 15–21°E | 18.5°E (17.5–20.5) | 18.5°E (17.5–18.5) |
+    | Fate divide, P(E) = P(W), at 34–45°S | 15–21°E | **14.5°E (11.5–18.5), outside** | 15.5°E (13.5–17.5) |
+    | Return Current latitude | 37–41°S | 38.5°S (38.5–39.5) | 40.0°S (39.5–40.5) |
+    | Cape Basin mean flow | north-west, 270–360° | 342° (331–352) | 356° (352–359) |
+    | Leakage share from the core rows | interval overlaps 21–30% | 27% (20–36) | 26% (20–32) |
+
+  - Seven of the eight rules hold for drogued material. The fate divide falls one cell west of its range, though its interval reaches into it. Exits are counted at 10°E, so the divide also depends on where R was drawn.
+  - The leakage share compares surface material with a transport over the upper 1,000 m (15–21.3 Sv of 70 Sv in the literature), so it is a check of size only. The Cape Basin mean holds the Benguela Current as well as the rings, so its direction cannot separate them.
+- [x] Source and sink cells — `scripts/30_source_sink.py` (1°, τ = 3.5 d): with one unit of material in every ocean cell, the column sum of P is what a cell holds after one step. Reliable cells off the box edge are judged by whether the 95% interval excludes 1. Cells on the edge are not judged: inflow from outside R is not in the matrix, so they look like sources whatever the flow does.
+  - Drogued: 28 sinks and 36 sources of 647 cells. Undrogued: 30 sinks and 48 sources of 789 cells. That is about 10% of cells, against the 5% expected by chance, since the intervals are not corrected for the number of cells.
+  - The two drogue types barely agree over the 642 cells reliable in both (correlation 0.21). Only 13 cells are judged in both, all with the same kind. On the 2° grid the correlation is 0.52, and 17 of the 18 cells judged in both have the same kind.
+  - The one-step pattern is therefore weak: about half of the judged cells are what chance alone would give. Some of the rest may come from the 1° grid, since a fast current crosses about three cells per step, but that has not been tested. Retention (`13`) and fates (`15`) are the better guide to where R gathers and loses material.
+  - Gulf Stream: 28 sinks and 30 sources of 609 cells drogued, 26 and 21 of 599 undrogued, with correlation 0.15.
 
 Open questions:
 - Drogued stranding rests on the few drifters still drogued when they reached the coast, since 121 of the 139 grounded drifters lost their drogue more than τ before grounding (`22`). The drogued stranding estimate is therefore treated as a lower bound rather than borrowing the undrogued rate.

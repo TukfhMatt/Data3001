@@ -27,6 +27,14 @@ The box balances shipping risk against oil retention (scored in `05_box_selectio
   | Distinct drifters | 1,503 |
 
   Consecutive hourly positions are strongly correlated; the independent sample size is the number of drifters (~1,170 undrogued), not the observation count.
+- GDP's `latest` store can change, so results depend on the fetch. The subsets behind the results in this repository were fetched in November 2026:
+
+  | File | Drifters | Hourly positions | SHA-256 |
+  |---|---|---|---|
+  | `data/agulhas_gdp1h_subset.nc` | 2,942 | 16,951,519 | `d11e21bb359e0575bc381554308bcfa4dedc8e7ebfc9808f000302f84c2528af` |
+  | `data/gulfstream_gdp1h_subset.nc` | 3,022 | 23,595,748 | `4ae3273624c7f162cf01f5e17b83056a2d743b879fd207d9aa751c2e11408d22` |
+
+  Check a copy with `shasum -a 256 data/*_gdp1h_subset.nc`. If a new fetch gives another hash, compare the counts first, since the file's bytes can differ with the same data.
 
 - Drifters are split by **drogue status**, and a matrix is built for each:
   - **Drogued**: a sea anchor at 15 m is attached, so the drifter follows the near-surface current with little wind effect. This is passive water transport (e.g. a submerged container).
@@ -94,7 +102,7 @@ python scripts/00_fetch_agulhas_subset.py --fetch-box -90 -30 15 55 --out data/g
 ./run_all.sh --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc
 ```
 
-`./run_all.sh --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc` runs the steps that apply: `01`–`04`, `06`, `07`, `10`–`22`, `26` and `27`. `04` picks release points by traffic alone outside R, since its named ports are all in R. `05` searches around the Agulhas core only, and `23`–`25` stop with a message outside the Agulhas area, because the named coasts and routes describe that region. `08` and `09` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, and figure names start with the first word of the subset's file name (here `gulfstream_`).
+`./run_all.sh --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc` runs the steps that apply: `01`–`04`, `06`, `07`, `10`–`22`, `26`, `27` and `30`. `04` picks release points by traffic alone outside R, since its named ports are all in R. `05` searches around the Agulhas core only, and `23`–`25` and `31` stop with a message outside the Agulhas area, because the named coasts, the routes and the expected features describe that region. `08` and `09` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, and figure names start with the first word of the subset's file name (here `gulfstream_`).
 
 | Script | What it does | Output |
 |---|---|---|
@@ -128,6 +136,8 @@ python scripts/00_fetch_agulhas_subset.py --fetch-box -90 -30 15 55 --out data/g
 | `27_decorrelation_time.py` | Velocity autocorrelation and integral timescale per drogue type (over 10–40°E, 45–25°S in R), with 1,000 resamples of whole drifters | `data/decorrelation_{res}deg_{box}.csv`, `data/decorrelation_curve_…csv`, `figures/agulhas_decorrelation_…png` |
 | `28_oil_windage.py` | Oil at 3%, 3.5% and 4% of the wind against undrogued material, for all traffic, each route and each release point: stranding by coast, days to strand, oil mass stranded and exits; the interval of the 4% − 3% difference on the same drifter resamples; method flags at each windage | `data/oil_windage_…csv`, `data/oil_windage_difference_…csv`, `data/oil_windage_method_flags_…csv`, `figures/agulhas_oil_windage_…png` |
 | `29_spill_hindcasts.py` | Sets the oil matrix against two recorded spills under a fixed decision rule: stranding within 30 days, the coast that receives most, and the direction of drift, at the spill cell and the nearest reliable cell, with 1,000 resamples of whole drifters | `data/spill_hindcasts_…csv`, `data/spill_hindcast_verdicts_…csv`, `figures/agulhas_spill_hindcasts_…png` |
+| `30_source_sink.py` | Which cells gather or shed material over one step: the column sums of P, with 1,000 resamples of whole drifters; cells on the edge of R are not judged, since inflow from outside is not in the matrix | `data/source_sink_…csv`, `figures/agulhas_source_sink_…png` |
+| `31_known_features.py` | Sets the mean current and the matrices against the known circulation under fixed rules: current speed and path, drift from Durban, retroflection, fate divide, Return Current latitude, Cape Basin flow and leakage share, with 1,000 resamples of whole drifters | `data/known_features_…csv`, `figures/agulhas_known_features_…png` |
 | `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
 | `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
 
@@ -249,4 +259,6 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Oil windage range: 3%, 3.5% and 4% of the wind; windage changes how soon oil strands more than how much, and the coast ranking holds
 - [x] Packaging: one command runs every step (`run_all.sh`); a fresh clone in a fresh environment from `requirements.txt` reproduces every output table and matrix exactly; worked example for any release point
 - [x] Second region: the core pipeline on the Gulf Stream box, with no region-specific code changes
+- [x] Known features: the current's speed and path, the end of the westward jet (18.5°E), the Return Current's latitude (38.5°S), Cape Basin flow and the leakage share (27%) all agree with the fixed rules; the drogued fate divide (14.5°E) falls just west of its range
+- [x] Source and sink cells: about 10% of cells off the box edge are judged either, against 5% by chance, and the two drogue types barely agree (correlation 0.21), so retention and fates are the better guide
 - [x] Hypothesis tests: H1 supported, H2 supported in 7 of 8 lane cells (drogued is a lower bound), H3 supported from 17.5 days (at 14 days the undrogued operator beats advection in 3 of 5 folds)

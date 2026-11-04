@@ -326,7 +326,7 @@ for j, (metric, col) in enumerate([("stranded_30d", "exit_stranded"), ("inR_365d
         cmp_[f"undrogued_{metric}_lo"], cmp_[f"undrogued_{metric}_hi"] = ci[:, 0], ci[:, 1]
 cmp_.to_csv(f"data/oil_compare_{TAG}.csv", index=False)
 
-print(f"\nRelease points — 30-day coastal exposure (material-days) and stranding, 1-year fate, A vs B distance")
+print("\nRelease points — 30-day coastal exposure (material-days) and stranding, 1-year fate, A vs B distance")
 print(f"{'':<28}{'coast 30 d':^24}{'stranded 30 d':^24}{'in R 1 yr':^24}{'exit W 1 yr':^24}{'TVD A–B':^14}")
 print(f"{'':<28}" + f"{'undr':>8}{'oil A':>8}{'chk B':>8}" * 4 + f"{'7 d':>7}{'30 d':>7}")
 for _, r in cmp_.iterrows():

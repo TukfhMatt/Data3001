@@ -20,7 +20,6 @@ import pandas as pd
 import matplotlib
 matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
-import matplotlib.patheffects as pe
 import xarray as xr
 
 from config import MIN_DRIFTERS, box_tag, grid_shape, parse_args, region_prefix
