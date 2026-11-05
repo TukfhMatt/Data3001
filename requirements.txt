@@ -1,4 +1,4 @@
-# Direct dependencies of scripts/, pinned to the versions the results were built with (Python 3.9).
+# Direct dependencies of agulhas/, pinned to the versions the results were built with (Python 3.9).
 aiohttp==3.13.5
 cartopy==0.23.0
 cdsapi==0.7.7
@@ -10,6 +10,7 @@ numcodecs==0.12.1
 numpy==2.0.2
 pandas==2.3.3
 rasterio==1.4.3
+requests==2.32.5
 scipy==1.13.1
 shapely==2.0.7
 tqdm==4.70.1
