@@ -1,13 +1,13 @@
 """
 Shared settings for the Agulhas pipeline and the command-line options that
-override them. Scripts 01–04 read the region, grid and lag from here, so a
-run on another box, grid or lag needs no code change, e.g.
+override them. Steps read the region, grid and lag from here, so a run on
+another box, grid or lag needs no code change, e.g.
 
-    .venv/bin/python scripts/03_transition_matrix.py --box 10 55 -41 -15 --res 1 --tau 5
+    python -m agulhas transition_matrix --box 10 55 -41 -15 --res 1 --tau 5
 
 Defaults are the current analysis settings. The box must lie inside the area
-fetched by 00 (by default 5°W–65°E, 60–5°S), with some margin for exits; a box
-elsewhere needs its own subset from 00, passed with --data.
+fetched by fetch_gdp_subset (by default 5°W–65°E, 60–5°S), with some margin for exits; a box
+elsewhere needs its own subset from fetch_gdp_subset, passed with --data.
 """
 
 import argparse
@@ -15,10 +15,13 @@ import os
 
 import numpy as np
 
-GDP_LOCAL = "data/agulhas_gdp1h_subset.nc"   # written by 00
-BOX = (10.0, 55.0, -45.0, -15.0)             # lon_min, lon_max, lat_min, lat_max (group choice, see 05)
-RESOLUTIONS = [0.5, 1.0, 2.0]                # grids compared in 02 and built in 03
-RES = 1.0                                    # grid for single-grid steps (04)
+SHIP_URL = ("https://datacatalogfiles.worldbank.org/ddh-published/0037580/5/"
+            "DR0045405/shipdensity_commercial_.zip")
+SHIP_ZIP = "data/shipping/shipdensity_commercial.zip"
+GDP_LOCAL = "data/agulhas_gdp1h_subset.nc"   # written by fetch_gdp_subset
+BOX = (10.0, 55.0, -45.0, -15.0)             # lon_min, lon_max, lat_min, lat_max (group choice, see box_selection)
+RESOLUTIONS = [0.5, 1.0, 2.0]                # grids compared in grid_coverage and built in transition_matrix
+RES = 1.0                                    # grid for single-grid steps (shipping_overlay)
 TAU_DAYS = 3.5
 MIN_DRIFTERS = 10                            # rows with fewer distinct drifters are flagged
 OIL_WINDAGE_RANGE = {"oil_3pct": 0.03, "oil": 0.035, "oil_4pct": 0.04}   # oil matrices, by share of the wind
@@ -26,14 +29,14 @@ DISAGREE_TVD = 0.3                           # oil against its check at 30 d abo
 DROGUE_TYPES = {"drogued": True, "undrogued": False}
 
 
-def parse_args(doc, grid=False, lag=False, multi=False, extra=None):
-    """Parse --box and --data, plus --res / --tau when the script uses them.
+def parse_args(doc, grid=False, lag=False, multi=False, extra=None, argv=None):
+    """Parse --box and --data, plus --res / --tau when the step uses them.
     With multi=True, --res and --tau take several values (lists). extra adds a
-    script's own options to the parser."""
+    step's own options to the parser, and argv replaces the command line."""
     p = argparse.ArgumentParser(description=doc.strip().splitlines()[0])
     p.add_argument("--box", nargs=4, type=float, default=list(BOX),
                    metavar=("LON_MIN", "LON_MAX", "LAT_MIN", "LAT_MAX"))
-    p.add_argument("--data", default=GDP_LOCAL, help="subset written by 00")
+    p.add_argument("--data", default=GDP_LOCAL, help="subset written by fetch_gdp_subset")
     if grid:
         p.add_argument("--res", type=float, nargs="+" if multi else None,
                        default=RESOLUTIONS if multi else RES, help="grid size in degrees")
@@ -42,7 +45,7 @@ def parse_args(doc, grid=False, lag=False, multi=False, extra=None):
                        default=[TAU_DAYS] if multi else TAU_DAYS, help="lag in days")
     if extra:
         extra(p)
-    args = p.parse_args()
+    args = p.parse_args(argv)
     check_box_in_subset(args.box, args.data)
     return args
 
@@ -58,7 +61,7 @@ def check_box_in_subset(box, data):
         lat_min, lat_max = map(float, ds.attrs["lat_range"].split(".."))
     if box[0] < lon_min or box[1] > lon_max or box[2] < lat_min or box[3] > lat_max:
         raise SystemExit(f"Box {list(box)} is outside {data} (lon {lon_min:g} to {lon_max:g}, "
-                         f"lat {lat_min:g} to {lat_max:g}). Fetch it with 00 and pass that file with --data.")
+                         f"lat {lat_min:g} to {lat_max:g}). Fetch it with fetch_gdp_subset and pass that file with --data.")
 
 
 def grid_shape(box, res):
@@ -110,7 +113,7 @@ def place_label(lon, lat):
 
 def wind_paths(data):
     """Per-year folder and combined file of ERA5 wind at a subset's positions
-    (08), so each subset keeps its own."""
+    (fetch_era5), so each subset keeps its own."""
     if data == GDP_LOCAL:
         return "data/era5", "data/drifter_wind10m.nc"
     stem = os.path.splitext(os.path.basename(data))[0]
@@ -123,7 +126,7 @@ def operator_path(name, res, tau, box):
 
 
 def release_points_path(box, res=RES, tau=TAU_DAYS):
-    """Candidate release points from 04, by the box, grid and lag they were
+    """Candidate release points from shipping_overlay, by the box, grid and lag they were
     picked on. Later steps read their box's points picked at the default grid
     and lag, whatever grid and lag they run on, so results at different
     settings compare the same points."""

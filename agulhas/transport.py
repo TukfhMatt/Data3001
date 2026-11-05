@@ -1,7 +1,7 @@
 """
 Helpers for using a saved Agulhas transport operator.
 
-    from transport import load_operator, release, propagate, to_grid
+    from agulhas.transport import load_operator, release, propagate, to_grid
 
     op = load_operator("data/P_drogued_1deg_3p5d_10E-55E_45S-15S.npz")
     p0 = release(op, lon=31.5, lat=-30.5)   # all mass in one cell
@@ -10,17 +10,17 @@ Helpers for using a saved Agulhas transport operator.
 
 States 0..n_cells-1 are ocean grid cells in R; the last five are absorbing,
 in the order of op["exit_labels"]: left R across the W, E, S or N edge, and
-"stranded" (ran aground on a coast inside R). The coastal operators from 23
+"stranded" (ran aground on a coast inside R). The coastal operators from coastal_stranding
 split "stranded" into one state per named coast (COAST_LABELS).
 
-cell_centres, reliable and absorption serve the whole-box analysis (11–17):
+cell_centres, reliable and absorption serve the whole-box analysis (agulhas.whole_box):
 absorption gives each cell's expected time in R and eventual exit or
 stranding exactly, from the fundamental matrix.
 
 The building helpers at the end (strand_times, move_indices,
-transition_states, row_normalise) are shared by every script that builds a
-matrix (03, 06, 09, 10, 13), so all builds match 03 exactly; drifter_counts
-and resampled_counts redraw whole drifters for a bootstrap.
+transition_states, row_normalise) are shared by every step that builds a
+matrix (transition_matrix, bootstrap, oil_wind, held_out, trap_stability), so
+all builds match transition_matrix exactly; drifter_counts and resampled_counts redraw whole drifters for a bootstrap.
 """
 
 import numpy as np
@@ -30,7 +30,7 @@ STRANDED = len(EXIT_LABELS) - 1          # offset of the stranded state after th
 STRAND_MATCH_S = 86400                   # last subset obs within this of GDP's end date
 
 # Named coasts of the default box R, for operators whose stranded state is
-# split by where drifters ran aground (23). Each has ≥ 13 grounded drifters.
+# split by where drifters ran aground (coastal_stranding). Each has ≥ 13 grounded drifters.
 COAST_LABELS = np.array(["atlantic_cape", "sa_south_east", "mozambique_south",
                          "mozambique_central_north", "madagascar_west_south", "madagascar_east"])
 COAST_AREA = (0.0, 60.0, -55.0, -10.0)   # lon_min, lon_max, lat_min, lat_max
@@ -45,7 +45,7 @@ COAST_COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300"
 
 def check_coast_box(box):
     """Stop if the box is outside the Agulhas area that the named coasts of
-    coast_of (and the routes of 24) describe."""
+    coast_of (and the routes of traffic_exposure) describe."""
     if box[0] < COAST_AREA[0] or box[1] > COAST_AREA[1] or box[2] < COAST_AREA[2] or box[3] > COAST_AREA[3]:
         raise SystemExit(f"Box {list(box)} is outside {COAST_AREA}: the named coasts and routes only "
                          "describe the Agulhas region, so this step does not apply to it.")
@@ -218,8 +218,8 @@ def same_drogue(drogue, start, end, stranded, flag):
     move needs that status at both ends. A move into the stranded state needs
     it at the start only: the flag often flips to undrogued in a record's last
     hours (16 of 139 drifters that ran aground in R, and as often for those
-    that stopped transmitting; see 22), so the last fix does not show how the drifter
-    reached the coast."""
+    that stopped transmitting; see drogue_loss), so the last fix does not show how
+    the drifter reached the coast."""
     return (drogue[start] == flag) & ((drogue[end] == flag) | stranded)
 
 
