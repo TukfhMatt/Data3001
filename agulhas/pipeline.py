@@ -51,6 +51,7 @@ STEPS = [
     Step("held_out_tau5", "validation.held_out", ("--res", "1", "--tau", "5")),
     Step("held_out_res05", "validation.held_out", ("--res", "0.5", "--tau", "3.5")),
     Step("held_out_res2", "validation.held_out", ("--res", "2", "--tau", "3.5")),
+    Step("held_out_year", "validation.held_out_year"),
     Step("whole_box_analysis", "whole_box.whole_box_analysis"),
     Step("coastal_coverage", "whole_box.coastal_coverage"),
     Step("trap_stability", "whole_box.trap_stability"),
