@@ -206,6 +206,23 @@ The core pipeline also runs on the Gulf Stream, box 80–40°W, 25–45°N, with
 python -m agulhas oil_explorer
 ```
 
+## OpenDrift comparison
+
+The matrix is also compared with OpenDrift, an open-source particle model used for spill work. `OceanDrift` runs on the real currents and winds of each date (GLORYS12 at 1/12° and ERA5), with oil at 3.5% of the wind and no weathering. It answers what the matrix's averaging costs and whether the matrix still gets the broad risks right; it does not show which is better, since the matrix only knows the average. These steps are not part of a full run, because OpenDrift needs Python 3.10 or newer:
+
+```bash
+python3.12 -m venv .venv-opendrift
+.venv-opendrift/bin/pip install -r requirements-opendrift.txt
+.venv-opendrift/bin/copernicusmarine login          # a free Copernicus Marine account
+
+.venv-opendrift/bin/python -m agulhas opendrift_forcing    # about 3 GB, into data/opendrift/forcing
+.venv-opendrift/bin/python -m agulhas opendrift_points     # 60 start dates at the 13 release points
+.venv-opendrift/bin/python -m agulhas opendrift_treasure   # the Treasure spill; --leak-days 5 for the sensitivity
+.venv-opendrift/bin/python -m agulhas opendrift_compare    # the table and figure
+```
+
+If `roaring_landmask` cannot load `liblzma` on macOS, install `xz`, or point the library at the system copy with `install_name_tool -change /opt/homebrew/opt/xz/lib/liblzma.5.dylib /usr/lib/liblzma.5.dylib` on its `.so` and re-sign it with `codesign -f -s -`.
+
 ## Worked example
 
 `agulhas/tools/worked_example.py` answers the project's question for any point: where does material released here go? It reads the pipeline's outputs and reports what is needed to judge the answer, namely the data behind the cell, 95% intervals, the coast and, for oil, whether the result depends on the method. It also saves a map.

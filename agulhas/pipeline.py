@@ -75,10 +75,15 @@ STEPS = [
     Step("source_sink", "whole_box.source_sink"),
     Step("known_features", "validation.known_features", agulhas_only=True),
 ]
-# Not part of a full run: these only read the pipeline's outputs
+# Not part of a full run: the tools only read the pipeline's outputs, and the
+# OpenDrift comparison needs its own environment (requirements-opendrift.txt)
 TOOLS = [
     Step("worked_example", "tools.worked_example"),
     Step("oil_explorer", "tools.oil_explorer"),
+    Step("opendrift_forcing", "comparison.opendrift_forcing"),
+    Step("opendrift_points", "comparison.opendrift_points"),
+    Step("opendrift_treasure", "comparison.opendrift_treasure"),
+    Step("opendrift_compare", "comparison.opendrift_compare"),
 ]
 NEEDS_SHIPPING = {"shipping_overlay", "box_selection"}
 

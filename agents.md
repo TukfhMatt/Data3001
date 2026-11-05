@@ -11,6 +11,7 @@ A university data science project (Data3001) that builds a surface-transport ope
 - Use the project virtual environment: `.venv/bin/python` (Python 3.9).
 - `python -m agulhas all` runs every step in order (`--from`, and `--box` with `--data` for another region); `python -m agulhas list` prints the steps and `python -m agulhas <step>` runs one. Run these **from the repository root**; steps use relative paths (`data/...`, `figures/...`), and import `agulhas.config` and `agulhas.transport`. `python -m pytest` runs the tests, which need no data.
 - The Python is built against LibreSSL, so urllib3 prints a `NotOpenSSLWarning`; it is harmless. Pass `-W ignore` for cleaner output.
+- The OpenDrift comparison (`agulhas/comparison/`) runs in its own environment, `.venv-opendrift` from `requirements-opendrift.txt`, because OpenDrift needs Python 3.10 or newer. Those steps are in `TOOLS`, not in a full run. Its forcing and results stay in `data/opendrift/`.
 - Dependencies are pinned in `requirements.txt`. `zarr` stays on 2.x (`zarr.open_group` on an `FSStore` over HTTPS). Do not upgrade to zarr 3 without checking `agulhas/sources/fetch_gdp_subset.py`.
 - No dask is installed and the machine has 8 GB RAM. Never load the full global GDP arrays (197M observations) into memory; stream them chunk by chunk as `fetch_gdp_subset` does.
 
