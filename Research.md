@@ -85,6 +85,7 @@ Whole-box structure:
 
 Validation:
 - Held-out drifters (whole trajectories): their actual positions after 1 week / 1 month against the matrix predictions.
+- Held-out fates out to one year, allowing for records that end early (`agulhas/validation/held_out_year.py`).
 - Sensitivity to grid size (0.5°, 1°, 2°) and τ (2 and 5 days).
 - Four seasonal operators (DJF, MAM, JJA and SON) against the annual operator, with 2° used as a robustness check where 1° drogued seasonal support is sparse.
 - Chapman–Kolmogorov consistency: compare `P(3.5 d)^2` with transitions estimated directly at 7 days.
@@ -192,6 +193,28 @@ Progress:
   - Errors are median distances from the forecast (Markov: centre of mass of the predicted distribution still in R) to the actual position. Baselines start from the cell centre, the same information the matrix has; from the exact start position they are ~10 km better at 3.5 d, which is the 1° grid's own error.
   - The matrix ties the baselines at 3.5 d and beats them by 28 d (5–6% vs advection, 15–23% vs persistence). Its main value is the distribution: the log score is far above climatology at every horizon, the predicted share leaving R matches the observed share (calibration within a few points across the full 0–1 range at 28 d), and the predicted share stranding matches what held-out drifters do at every horizon.
 
+- [x] Held-out validation to one year — `agulhas/validation/held_out_year.py` (1°, τ = 3.5 d; the folds and test starts of `held_out`, followed for 104 steps). A fate is censored when a record ends without grounding or a drogued start loses its drogue, and observed shares are Aalen–Johansen estimates, since keeping only known fates over-counts exits: drogued "still in R" at a year would read 4.1% instead of 17.1%. On simulated fates with about two-thirds censored the estimator stays within 0.8 points of the truth. 95% intervals resample whole held-out drifters with the fold matrices fixed.
+
+    | Type | Fate | Day 182, predicted / observed | Day 364, predicted / observed (95%) | Predicted − observed at day 364 (95%) |
+    |---|---|---|---|---|
+    | Drogued | Still in R | 38.2 / 35.6% | 17.3 / 17.1% (9.5–25.0) | +0.2 (−7.0 to +7.2) |
+    | Drogued | Exited east | 37.1 / 39.1% | 53.8 / 55.0% (46.9–63.3) | −1.2 (−8.4 to +6.0) |
+    | Drogued | Exited west | 14.9 / 18.2% | 17.6 / 19.6% (15.3–24.3) | −2.1 (−4.9 to +0.6) |
+    | Drogued | Stranded | 1.8 / 1.5% | 2.5 / 1.5% (0.6–2.7) | +1.0 (−0.1 to +2.0) |
+    | Undrogued | Still in R | 41.0 / 38.6% | 21.0 / 18.8% (15.3–22.6) | +2.2 (−1.3 to +5.2) |
+    | Undrogued | Exited east | 36.9 / 41.4% | 51.6 / 55.3% (51.4–59.4) | −3.7 (−7.3 to −0.3) |
+    | Undrogued | Exited west | 10.5 / 10.5% | 12.7 / 13.2% (10.7–16.0) | −0.5 (−2.5 to +1.4) |
+    | Undrogued | Stranded | 7.4 / 6.8% | 10.2 / 9.7% (7.4–12.3) | +0.5 (−1.7 to +2.7) |
+
+  - Across R the matrices hold up to a year: every fate's predicted share is within 3.7 points of the observed one at day 364, and within 4.4 points at any horizon. The start cell keeps its value, with a multi-class Brier skill against the training folds' mean fate of 0.27 (0.24–0.31) undrogued and 0.47 (0.38–0.58) drogued at day 364.
+  - Support falls quickly. In R at day 364 the estimate rests on 105 undrogued drifters but only 14 drogued ones, since most lose the drogue first, so the drogued year is weak evidence; its calibration can be binned only to about day 182, where it holds.
+  - Undrogued exits east are under-predicted at every horizon, by 0.7, 2.9, 4.4, 4.3 and 3.7 points at days 28, 91, 182, 273 and 364, with intervals below zero throughout.
+  - The highest undrogued retention is overstated: in the top two deciles of predicted "still in R" at day 364, 42% and 51% are predicted against 33% (26–41) and 40% (30–50) observed. Stranding is well calibrated up to about 25%; the top decile reads 49% against 43% (35–51).
+  - The largest regional gap is undrogued starts at 50–55°E: 26% against 19% still in R (difference +2.9 to +11.6) and 53% against 64% exited east (−15.2 to −5.6). Bands from 10°E to 50°E agree within their intervals for still in R and stranded.
+  - Single release points cannot be tested at a year: at most 11 undrogued and 1 drogued drifters are still followed in R at day 364 from any release cell, and most have 0–4. Their one-year figures rest on the whole-box result, not on a test of their own.
+  - Estimating within start-longitude bands or before and after 2010 moves each share by at most 1.8 points. This does not rule out censoring tied to the fate itself. Stranding is judged by the same GDP labels the matrix is built from, so a mislabelled grounding cannot be detected. The comparisons are not corrected for their number, and the oil matrix has no direct test, since no drifter moves as it does.
+  - Outputs: `data/validation_year_summary_…csv`, `data/validation_year_support_…csv`, `data/validation_year_calibration_…csv`, `data/validation_year_bands_…csv`, `data/validation_year_points_…csv`, `figures/agulhas_validation_year_…png`.
+
 - [x] Sensitivity to τ and grid size — `agulhas/validation/sensitivity.py`: reference 1°, τ = 3.5 d against τ = 2 and 5 d at 1°, and 0.5° and 2° at τ = 3.5 d, each with its own held-out validation from `held_out`; the 13 release points' one-year fates (still in R, exited W, exited E, stranded) are checked against the reference's 95% bootstrap interval from `bootstrap`.
 
     | Setting | Flagged rows | 28-day error | Skill vs persistence at 7 / 28 d | Exit pred / obs at 28 d | Stranded pred / obs at 28 d (undrogued) | One-year fates inside the reference interval |
@@ -270,7 +293,7 @@ Progress:
 
 - [x] Whole-box structure — `agulhas/whole_box/` (all grids at τ = 3.5 d, both drogue types; numbers below at 1°, drogued / undrogued, over reliable cells).
   - Support (`whole_box_analysis`, `coastal_coverage`): 78% / 93% of active rows reliable (0.5°: 52% / 91%; 2°: 90% / 94%). Coastal cells (land neighbour on the grid): 33% / 47% reliable, against 82% / 98% offshore.
-  - Retention hotspots (`trap_stability`): drogued at 41–44°E, 30–33°S, 63–65% still in R after a year (95% intervals about 48–74%); 70 of 75 hotspot cells stay in the top 10% in ≥ 50% of 1,000 drifter resamples. Undrogued at 48–51°E, 30–33°S, 55–56% (49–60%), 88 of 90 stable. Where both grids are reliable, 1° and 2° hotspots agree (Jaccard 76% / 73%); 0.5° drogued agrees less (37–41%).
+  - Retention hotspots (`trap_stability`): drogued at 41–44°E, 30–33°S, 63–65% still in R after a year (95% intervals about 48–74%); 70 of 75 hotspot cells stay in the top 10% in ≥ 50% of 1,000 drifter resamples. Undrogued at 48–51°E, 30–33°S, 55–56% (49–60%), 88 of 90 stable. Where both grids are reliable, 1° and 2° hotspots agree (Jaccard 76% / 73%); 0.5° drogued agrees less (37–41%). Held-out drifters show the highest undrogued retention overstated by about 10 points (95% intervals +1 to +21; `held_out_year`).
   - Residence time (`residence_time`): mean 223 / 203 days, median 223 / 213, longest in the hotspots (518 / 459 days); grids within about 40 days.
   - Exit zones (`exit_zones`): eventual fate E 69% / 62%, W 18% / 17%, S 6% / 4%, N 2% / 3%, stranded 4% / 15%; east is the most likely fate in 83% / 75% of cells, stranding in 11% of undrogued cells (Mozambique Channel coast, east of Madagascar) and in no drogued cell.
   - Almost-invariant regions (`almost_invariant_regions`): four for both drogue types (retroflection and Atlantic side; Natal coast and Mozambique Channel; south of Madagascar and Return Current; east of Madagascar), keeping 81–94% over one step, 54–70% over 30 days and 1–8% over a year. Three keep 13–23 points more over 30 days than longitude bands of the same sizes; the western one matches its band. The eigenvalues fall off smoothly, so four regions is a choice.
