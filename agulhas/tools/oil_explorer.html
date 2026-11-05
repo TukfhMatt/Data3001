@@ -41,7 +41,7 @@ button, select { font: inherit; color: inherit; }
 .layout { display: grid; grid-template-columns: max-content minmax(340px, 1fr); gap: 14px; align-items: start; }
 .map-wrap { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 canvas { display: block; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); cursor: crosshair; touch-action: manipulation; }
-.scale { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 13px; color: var(--muted); }
+.scale { width: 0; min-width: 100%; display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; font-size: 13px; color: var(--muted); }
 .scale .bar { width: 200px; height: 10px; border-radius: 2px; background: linear-gradient(90deg, #F5C27F, #E58A3E, #B5461A, #6E2410, #2A0F06); }
 .scale .ticks { width: 200px; display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; font-size: 12px; }
 .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
@@ -97,6 +97,7 @@ svg text { font: 400 11px var(--body); fill: var(--muted); }
         <div><div class="bar"></div><div class="ticks"><span>0.01%</span><span>0.1%</span><span>1%</span><span>10%</span><span>100%</span></div></div>
         <span id="scale-label"></span>
         <span>Small hollow dots mark thin cells.</span>
+        <span>Pink circles show stranding on each named coast, drawn mid-coast and not at an exact point.</span>
       </div>
     </div>
     <div class="panel">
@@ -233,7 +234,7 @@ function layout() {
   const narrow = window.innerWidth < 900;
   let w = narrow ? avail : avail - 354;
   if (!narrow) {
-    const maxH = Math.max(380, window.innerHeight - 190);
+    const maxH = Math.max(380, window.innerHeight - 220);
     w = Math.min(w, (maxH - M.t - M.b) / ASPECT + M.l + M.r);
   }
   w = Math.floor(Math.max(280, w));
@@ -243,7 +244,11 @@ function layout() {
   canvas.style.width = w + "px"; canvas.style.height = geom.h + "px";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
-const LABELS = [["South Africa", 23.5, -30.2], ["Mozambique", 34.6, -17.6], ["Madagascar", 46.8, -19.5], ["Namibia", 17.5, -22.5], ["Zimbabwe", 29.5, -19.3], ["Botswana", 23.5, -23]];
+const LABELS = [["South Africa", 23.5, -30.2], ["Mozambique", 35.2, -15.9], ["Madagascar", 46.8, -19.5], ["Namibia", 17.5, -22.5], ["Zimbabwe", 29.5, -19.3], ["Botswana", 23.5, -23]];
+// Where each named coast's stranding is drawn, in the order of DATA.coasts: mid-coast, since the matrix
+// records which coast oil reached and not the exact point. Labels go on the land side (side −1 is left).
+const STRAND_MARKS = [[16.6, -29.5, 1], [28.5, -32.7, -1], [35.4, -24, -1], [36.6, -18.2, -1], [44, -21.5, 1], [49.4, -18, -1]];
+const strandRadius = share => 3 + 19 * Math.sqrt(share);
 function drawMap() {
   const { pw, ph } = geom, c = ctx, cs = { ocean: css("--ocean"), land: css("--land"), coast: css("--coast"), ink: css("--ink"), muted: css("--muted"), panel: css("--panel") };
   c.clearRect(0, 0, geom.w, geom.h);
@@ -280,12 +285,31 @@ function drawMap() {
   c.textBaseline = "bottom";
   for (let lat = -40; lat < LAT1; lat += 10) c.fillText(`${-lat}°S`, M.l + 3, Y(lat) - 1);
   c.strokeStyle = cs.ink; c.lineWidth = 1; c.strokeRect(M.l + 0.5, M.t + 0.5, pw - 1, ph - 1);
+  // Stranded oil, which has left the grid, as a circle on the coast it reached (area follows the share)
+  const sum = summary(state.tr, state.step, state.view);
+  c.textBaseline = "middle"; c.font = `600 12px ${css("--body")}`;
+  STRAND_MARKS.forEach(([lon, lat, side], k) => {
+    const share = sum.coast[k];
+    if (share < 0.001) return;
+    const r = strandRadius(share), x = X(lon), y = Y(lat), label = pct(share);
+    c.beginPath(); c.arc(x, y, r, 0, 7); c.fillStyle = css("--s-strand"); c.fill();
+    c.lineWidth = 1.5; c.strokeStyle = "#fff"; c.stroke();
+    c.textAlign = side > 0 ? "left" : "right"; c.lineWidth = 3; c.strokeStyle = cs.land;
+    c.strokeText(label, x + side * (r + 4), y); c.fillStyle = cs.ink; c.fillText(label, x + side * (r + 4), y);
+  });
+  // The total, in the corner of the map furthest from the coasts
+  const total = `Stranded so far ${pct(sum.stranded)}`;
+  c.font = `500 13px ${css("--body")}`;
+  const tw = c.measureText(total).width, tx = M.l + pw - tw - 28, ty = M.t + ph - 40;
+  c.fillStyle = cs.panel; c.fillRect(tx, ty, tw + 24, 22);
+  c.strokeStyle = cs.coast; c.lineWidth = 1; c.strokeRect(tx + 0.5, ty + 0.5, tw + 23, 21);
+  c.beginPath(); c.arc(tx + 10, ty + 11, 4, 0, 7); c.fillStyle = css("--s-strand"); c.fill();
+  c.fillStyle = cs.ink; c.textAlign = "left"; c.fillText(total, tx + 18, ty + 12);
   // The release: a white halo keeps it visible on dark oil
   const rx = X(cellLon[state.cell]), ry = Y(cellLat[state.cell]);
   c.lineWidth = 4; c.strokeStyle = "#fff"; c.beginPath(); c.arc(rx, ry, 8, 0, 7); c.stroke();
   c.lineWidth = 2; c.strokeStyle = cs.ink; c.beginPath(); c.arc(rx, ry, 8, 0, 7); c.stroke();
   // Exits, on the edge they cross
-  const sum = summary(state.tr, state.step, state.view);
   c.fillStyle = cs.ink; c.font = `500 13px ${css("--body")}`; c.textAlign = "center"; c.textBaseline = "middle";
   c.fillText(`Left north ${pct(sum.edge.N)}`, M.l + pw / 2, M.t / 2);
   c.fillText(`Left south ${pct(sum.edge.S)}`, M.l + pw / 2, M.t + ph + M.b / 2);
@@ -451,6 +475,10 @@ canvas.addEventListener("click", ev => {
 });
 canvas.addEventListener("pointermove", ev => {
   const [lon, lat] = lonLatAt(ev), s = stateAt(lon, lat);
+  const sum = summary(state.tr, state.step, state.view), r = canvas.getBoundingClientRect();
+  const mark = STRAND_MARKS.findIndex(([mx, my], k) => sum.coast[k] >= 0.001
+    && Math.hypot(ev.clientX - r.left - X(mx), ev.clientY - r.top - Y(my)) <= Math.max(8, strandRadius(sum.coast[k])));
+  if (mark >= 0) { showTip(ev, `<strong>${DATA.coastNames[mark]}</strong><br>${pct(sum.coast[mark])} of the release stranded here by day ${dayText(state.step)}`); return; }
   if (s < 0) { hideTip(); return; }
   const v = state.tr.dist[state.step][s] * (state.view === "mass" ? state.tr.mass[state.step].decay : 1);
   showTip(ev, `<strong>${fmtPlace(cellLon[s], cellLat[s])}</strong><br>${pct(v)} of the release here on day ${dayText(state.step)}<br>${DATA.reliable[s] ? `${DATA.drifters[s]} drifters` : (DATA.empty[s] ? "Thin: no moves of its own" : `Thin: ${DATA.drifters[s]} drifters`)}. Click to release here.`);
