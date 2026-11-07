@@ -41,17 +41,18 @@ import re
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_WINDAGE_RANGE, box_tag, grid_shape, operator_path,
-                    parse_args, region_prefix, release_points_path, wind_paths)
-from agulhas.transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator,
-                       move_indices, propagate, release, resampled_counts, row_normalise,
-                       same_drogue, state_of, strand_times, to_grid, transition_states)
+from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_WINDAGE_RANGE, operator_path, parse_args, region_prefix,
+                            release_points_path, setting_tag, wind_paths)
+from agulhas.drifters import Drifters
+from agulhas.moves import MoveSet
+from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
+from agulhas.transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_counts, load_operator, propagate,
+                               release, resampled_counts, row_normalise, same_drogue, state_of, to_grid,
+                               transition_states)
 
 ALPHA_OIL = OIL_WINDAGE_RANGE["oil"]     # oil drift = surface current + 3.5% of wind
 DECAY_DAYS = 14.0                        # surface oil e-folding time
@@ -59,165 +60,171 @@ HORIZONS = [7, 30, 365]
 FAST_CURRENT = 0.3                       # m/s of mean drogued current, for the check of α without fast cells
 EAST_LON = 35.0                          # for the check of α east of the Agulhas Current
 N_BOOT = 1000                            # drifter resamples for α and the oil intervals
+SEED = 0
 M_PER_DEG_LAT = 110_574.0
 M_PER_DEG_LON_EQ = 111_320.0
+SOURCE = "NOAA GDP hourly v2.01 + ERA5 10 m wind (Copernicus CDS)"
 
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    RES, TAU = args.res, args.tau
-    WIND_PATH = wind_paths(args.data)[1]     # written by fetch_era5
-    TAG = f"{f'{RES:g}'.replace('.', 'p')}deg_{f'{TAU:g}'.replace('.', 'p')}d_{box_tag(args.box)}"
-
-    # ── 1. Load drifters and winds ───────────────────────────────────────────
-    ds = xr.open_dataset(args.data)
-    lon = ds["lon"].values.astype(float)
-    lat = ds["lat"].values.astype(float)
-    ve = ds["ve"].values.astype(float)
-    vn = ds["vn"].values.astype(float)
-    drogue = ds["drogue_status"].values.astype(bool)
-    t = ds["time"].values.astype("datetime64[s]").astype(np.int64)
-    traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
-    years = ds["time"].values.astype("datetime64[Y]").astype(int) + 1970
-
-    wind = xr.open_dataset(WIND_PATH)
+def load_winds(path, data, n_obs):
+    """ERA5 10 m wind at every observation of the subset, from fetch_era5."""
+    wind = xr.open_dataset(path)
     u10 = wind["u10"].values.astype(float)
     v10 = wind["v10"].values.astype(float)
-    if len(u10) != len(lon):
-        raise SystemExit(f"{WIND_PATH} does not match {args.data}: rerun fetch_era5 for this subset.")
+    if len(u10) != n_obs:
+        raise SystemExit(f"{path} does not match {data}: rerun fetch_era5 for this subset.")
+    return u10, v10
 
-    n_lon, n_lat = grid_shape(args.box, RES)
-    lon_edges = np.minimum(LON_MIN + np.arange(n_lon + 1) * RES, LON_MAX)
-    lat_edges = np.minimum(LAT_MIN + np.arange(n_lat + 1) * RES, LAT_MAX)
 
-    def cell_of(lo, la):
-        inside = (lo >= LON_MIN) & (lo < LON_MAX) & (la >= LAT_MIN) & (la < LAT_MAX)
-        return np.where(inside, ((la - LAT_MIN) // RES).astype(int) * n_lon
-                        + ((lo - LON_MIN) // RES).astype(int), -1)
+# ── Undrogued windage α from slip against wind ───────────────────────────────
 
-    cell_flat = cell_of(lon, lat)
-    in_R = cell_flat >= 0
-    cells = np.unique(cell_flat[in_R])        # same ocean cells as transition_matrix
-    print(f"Wind available at {np.isfinite(u10[in_R]).mean():.1%} of positions in R")
+class SlipFit:
+    """Per-drifter mean velocity and wind per cell and drogue type, from which α is
+    fitted for any weighting of the drifters. Per-drifter means come first, so a
+    drifter that loiters does not dominate a cell."""
 
-    # ── 2. Undrogued windage α from slip vs wind ─────────────────────────────
-    # Per-drifter means first, so a drifter that loiters does not dominate a cell
-    m = in_R & np.isfinite(ve) & np.isfinite(vn) & np.isfinite(u10)
-    df = pd.DataFrame({"cell": cell_flat[m], "traj": traj_idx[m], "drogued": drogue[m],
-                       "u": ve[m], "v": vn[m], "wu": u10[m], "wv": v10[m]})
-    per = df.groupby(["drogued", "cell", "traj"]).mean().reset_index()
-    # Per drogue type and cell: the weighted mean of its drifters' means, so the
-    # bootstrap can reweight drifters without regrouping
-    group = per["cell"].values * 2 + per["drogued"].values.astype(int)
-    n_groups = 2 * (per["cell"].max() + 1)
-    traj_ids, traj_pos = np.unique(per["traj"].values, return_inverse=True)
-    dro_g, und_g = np.arange(1, n_groups, 2), np.arange(0, n_groups, 2)
-    n_per = np.bincount(group, minlength=n_groups)
-    # Cells with ≥ MIN_DRIFTERS of each type; the set is fixed by the data, so
-    # the bootstrap varies only the drifters inside it
-    fit_d = dro_g[(n_per[dro_g] >= MIN_DRIFTERS) & (n_per[und_g] >= MIN_DRIFTERS)]
-    fit_u = fit_d - 1
+    def __init__(self, moves, u10, v10):
+        d = moves.drifters
+        ve, vn = d.ve, d.vn
+        m = moves.in_R & np.isfinite(ve) & np.isfinite(vn) & np.isfinite(u10)
+        df = pd.DataFrame({"cell": moves.cell_flat[m], "traj": d.traj_idx[m], "drogued": d.drogue[m],
+                           "u": ve[m], "v": vn[m], "wu": u10[m], "wv": v10[m]})
+        self.per = per = df.groupby(["drogued", "cell", "traj"]).mean().reset_index()
+        # Per drogue type and cell: the weighted mean of its drifters' means, so the
+        # bootstrap can reweight drifters without regrouping
+        self.group = per["cell"].values * 2 + per["drogued"].values.astype(int)
+        self.n_groups = 2 * (per["cell"].max() + 1)
+        self.traj_ids, self.traj_pos = np.unique(per["traj"].values, return_inverse=True)
+        dro_g, und_g = np.arange(1, self.n_groups, 2), np.arange(0, self.n_groups, 2)
+        n_per = np.bincount(self.group, minlength=self.n_groups)
+        # Cells with ≥ MIN_DRIFTERS of each type; the set is fixed by the data, so
+        # the bootstrap varies only the drifters inside it
+        self.fit_d = dro_g[(n_per[dro_g] >= MIN_DRIFTERS) & (n_per[und_g] >= MIN_DRIFTERS)]
+        self.fit_u = self.fit_d - 1
 
-    def fit_alpha(w, keep=None):
+    def alpha(self, w, keep=None):
         """α from drifter weights w (1 each for the data, bootstrap counts otherwise):
-    slip (undrogued − drogued cell mean) regressed through the origin on the
-    wind at the undrogued positions, over the fitting cells (or those in keep)."""
-        wt = w[traj_pos]
-        tot = np.maximum(np.bincount(group, weights=wt, minlength=n_groups), 1e-12)
-        mean = {c: np.bincount(group, weights=wt * per[c].values, minlength=n_groups) / tot
+        slip (undrogued − drogued cell mean) regressed through the origin on the
+        wind at the undrogued positions, over the fitting cells (or those in keep)."""
+        wt = w[self.traj_pos]
+        tot = np.maximum(np.bincount(self.group, weights=wt, minlength=self.n_groups), 1e-12)
+        mean = {c: np.bincount(self.group, weights=wt * self.per[c].values, minlength=self.n_groups) / tot
                 for c in ["u", "v", "wu", "wv"]}
-        ok = (tot[fit_d] >= 1) & (tot[fit_u] >= 1)    # a resample can miss every drifter of a cell
+        ok = (tot[self.fit_d] >= 1) & (tot[self.fit_u] >= 1)    # a resample can miss every drifter of a cell
         ok = ok if keep is None else ok & keep
-        d, u = fit_d[ok], fit_u[ok]
+        d, u = self.fit_d[ok], self.fit_u[ok]
         su, sv = mean["u"][u] - mean["u"][d], mean["v"][u] - mean["v"][d]
         wu, wv = mean["wu"][u], mean["wv"][u]
         return float((su * wu + sv * wv).sum() / (wu ** 2 + wv ** 2).sum())
 
-    rng = np.random.default_rng(0)
-    alpha_u = fit_alpha(np.ones(len(traj_ids)))
-    # Whole drifters are resampled: neighbouring cells share drifters, so cells are not independent
-    alpha_ci = np.percentile([fit_alpha(np.bincount(rng.integers(len(traj_ids), size=len(traj_ids)),
-                                                    minlength=len(traj_ids)))
-                              for _ in range(N_BOOT)], [2.5, 97.5])
-    n_alpha_cells = len(fit_d)
-    alpha_extra = ALPHA_OIL - alpha_u
-    one = per.groupby(group)[["u", "v"]].mean()      # drifter means per drogue type and cell
-    fit_speed = np.hypot(one["u"].reindex(fit_d).values, one["v"].reindex(fit_d).values)
-    fit_lon = LON_MIN + ((fit_d // 2) % n_lon + 0.5) * RES
-    alpha_slow = fit_alpha(np.ones(len(traj_ids)), fit_speed <= FAST_CURRENT)
-    alpha_east = fit_alpha(np.ones(len(traj_ids)), fit_lon >= EAST_LON)
+
+def measure_alpha(fit, grid, rng):
+    """α with its 95% interval over resampled whole drifters (neighbouring cells share
+    drifters, so cells are not independent), and α without fast cells and in the east."""
+    ones = np.ones(len(fit.traj_ids))
+    alpha_u = fit.alpha(ones)
+    n = len(fit.traj_ids)
+    alpha_ci = np.percentile([fit.alpha(np.bincount(rng.integers(n, size=n), minlength=n)) for _ in range(N_BOOT)],
+                             [2.5, 97.5])
+    one = fit.per.groupby(fit.group)[["u", "v"]].mean()      # drifter means per drogue type and cell
+    fit_speed = np.hypot(one["u"].reindex(fit.fit_d).values, one["v"].reindex(fit.fit_d).values)
+    fit_lon = grid.lon_min + ((fit.fit_d // 2) % grid.n_lon + 0.5) * grid.res
+    alpha_slow = fit.alpha(ones, fit_speed <= FAST_CURRENT)
+    alpha_east = fit.alpha(ones, fit_lon >= EAST_LON)
     print(f"Check: without cells of mean drogued current above {FAST_CURRENT:g} m/s α = {100 * alpha_slow:.2f}% "
           f"({(fit_speed <= FAST_CURRENT).sum()} cells); east of {EAST_LON:g}°E α = {100 * alpha_east:.2f}% "
           f"({(fit_lon >= EAST_LON).sum()} cells)")
     print(f"Undrogued windage α = {100 * alpha_u:.2f}% of 10 m wind "
-          f"(95% over drifters {100 * alpha_ci[0]:.2f}–{100 * alpha_ci[1]:.2f}%, {n_alpha_cells} cells)")
-    print(f"Oil windage {100 * ALPHA_OIL:.1f}% → added to undrogued: {100 * alpha_extra:.2f}%, "
+          f"(95% over drifters {100 * alpha_ci[0]:.2f}–{100 * alpha_ci[1]:.2f}%, {len(fit.fit_d)} cells)")
+    print(f"Oil windage {100 * ALPHA_OIL:.1f}% → added to undrogued: {100 * (ALPHA_OIL - alpha_u):.2f}%, "
           f"to drogued: {100 * ALPHA_OIL:.1f}%")
+    return alpha_u
 
-    # ── 3. Pairs, mean wind along each pair, shifted end points ──────────────
-    start, end, stranded = move_indices(traj_idx, t, in_R, TAU, strand_times(ds, traj_idx, t, in_R))
-    strand_s, strand_e = start[stranded], end[stranded]
-    start, end = start[~stranded], end[~stranded]
-    # Mean wind over the positions from start up to (not including) end; the
-    # subset is sorted by (trajectory, time), so these are the pair's own path
-    ok_w = np.isfinite(u10)
-    cs_u = np.concatenate([[0], np.cumsum(np.where(ok_w, u10, 0))])
-    cs_v = np.concatenate([[0], np.cumsum(np.where(ok_w, v10, 0))])
-    cs_n = np.concatenate([[0], np.cumsum(ok_w)])
-    n_w = cs_n[end] - cs_n[start]
-    mean_u = np.where(n_w > 0, (cs_u[end] - cs_u[start]) / np.maximum(n_w, 1), np.nan)
-    mean_v = np.where(n_w > 0, (cs_v[end] - cs_v[start]) / np.maximum(n_w, 1), np.nan)
-    has_wind = np.isfinite(mean_u)
-    print(f"Pairs: {len(start):,}; with wind along the path: {has_wind.mean():.1%}")
 
-    def build(name, drogue_flag, alpha, alpha_oil):
-        same = (drogue[start] == drogue_flag) & (drogue[end] == drogue_flag) & has_wind
-        s, e = start[same], end[same]
-        tau_s = TAU * 86400
-        dlat = alpha * mean_v[same] * tau_s / M_PER_DEG_LAT
-        dlon = alpha * mean_u[same] * tau_s / (M_PER_DEG_LON_EQ * np.cos(np.radians(lat[e])))
-        lo2, la2 = lon[e] + dlon, lat[e] + dlat
-        c2 = cell_of(lo2, la2)
-        # End points pushed onto land or an unvisited cell keep their drifter end
-        beached = (c2 >= 0) & ~np.isin(c2, cells)
-        lo2, la2, c2 = np.where(beached, lon[e], lo2), np.where(beached, lat[e], la2), np.where(beached, cell_flat[e], c2)
+# ── Oil matrices: drifter moves with wind-shifted end points ─────────────────
 
+class OilMoves:
+    """Every move from R, split into stranding moves (kept as they are) and the
+    rest, with the mean wind along each of the rest."""
+
+    def __init__(self, moves, u10, v10, alpha_u, args):
+        self.d, self.grid, self.args, self.alpha_u = moves.drifters, moves.grid, args, alpha_u
+        self.cell_flat = moves.cell_flat
+        self.cells = np.unique(self.cell_flat[moves.in_R])        # same ocean cells as transition_matrix
+        self.n_states = len(self.cells) + len(EXIT_LABELS)
+        stranded = moves.stranded
+        self.strand_s, self.strand_e = moves.start[stranded], moves.end[stranded]
+        self.start, self.end = moves.start[~stranded], moves.end[~stranded]
+        # Mean wind over the positions from start up to (not including) end; the
+        # subset is sorted by (trajectory, time), so these are the pair's own path
+        ok_w = np.isfinite(u10)
+        cs_u = np.concatenate([[0], np.cumsum(np.where(ok_w, u10, 0))])
+        cs_v = np.concatenate([[0], np.cumsum(np.where(ok_w, v10, 0))])
+        cs_n = np.concatenate([[0], np.cumsum(ok_w)])
+        n_w = cs_n[self.end] - cs_n[self.start]
+        self.mean_u = np.where(n_w > 0, (cs_u[self.end] - cs_u[self.start]) / np.maximum(n_w, 1), np.nan)
+        self.mean_v = np.where(n_w > 0, (cs_v[self.end] - cs_v[self.start]) / np.maximum(n_w, 1), np.nan)
+        self.has_wind = np.isfinite(self.mean_u)
+        print(f"Pairs: {len(self.start):,}; with wind along the path: {self.has_wind.mean():.1%}")
+
+    def shifted_ends(self, same, alpha):
+        """End points moved by alpha of the wind over τ. Ends pushed onto land or an
+        unvisited cell keep their drifter end. (lon, lat, cell, kept, shift in km)."""
+        d, e = self.d, self.end[same]
+        tau_s = self.args.tau * 86400
+        dlat = alpha * self.mean_v[same] * tau_s / M_PER_DEG_LAT
+        dlon = alpha * self.mean_u[same] * tau_s / (M_PER_DEG_LON_EQ * np.cos(np.radians(d.lat[e])))
+        lo2, la2 = d.lon[e] + dlon, d.lat[e] + dlat
+        c2 = self.grid.cell_of(lo2, la2)
+        beached = (c2 >= 0) & ~np.isin(c2, self.cells)
+        lo2, la2 = np.where(beached, d.lon[e], lo2), np.where(beached, d.lat[e], la2)
+        c2 = np.where(beached, self.cell_flat[e], c2)
+        shift_km = np.hypot(dlon * M_PER_DEG_LON_EQ * np.cos(np.radians(d.lat[e])), dlat * M_PER_DEG_LAT) / 1e3
+        return lo2, la2, c2, beached, shift_km
+
+    def states(self, flag, alpha):
+        """(from, to) of every move of one drogue type on the oil matrix, the moves'
+        starts, the stranding moves kept, and the shifted ends."""
+        d, box = self.d, self.args.box
+        same = (d.drogue[self.start] == flag) & (d.drogue[self.end] == flag) & self.has_wind
+        s = self.start[same]
+        ends = self.shifted_ends(same, alpha)
+        lo2, la2, c2 = ends[:3]
         # Extend the obs arrays with the shifted ends so the shared helper applies
-        n = len(lon)
-        ext_cell = np.concatenate([cell_flat, c2])
-        ext_lon, ext_lat = np.concatenate([lon, lo2]), np.concatenate([lat, la2])
-        from_state, to_state = transition_states(ext_cell, cells, s, n + np.arange(len(s)),
-                                                 ext_lon, ext_lat, args.box)
+        n = len(d.lon)
+        ext_cell = np.concatenate([self.cell_flat, c2])
+        ext_lon, ext_lat = np.concatenate([d.lon, lo2]), np.concatenate([d.lat, la2])
+        from_state, to_state = transition_states(ext_cell, self.cells, s, n + np.arange(len(s)), ext_lon, ext_lat, box)
         # Stranding moves of this drogue type, unshifted
-        k = same_drogue(drogue, strand_s, strand_e, True, drogue_flag)
-        f2, t2 = transition_states(cell_flat, cells, strand_s[k], strand_e[k], lon, lat, args.box,
+        k = same_drogue(d.drogue, self.strand_s, self.strand_e, True, flag)
+        f2, t2 = transition_states(self.cell_flat, self.cells, self.strand_s[k], self.strand_e[k], d.lon, d.lat, box,
                                    np.ones(k.sum(), bool))
-        from_state, to_state = np.r_[from_state, f2], np.r_[to_state, t2]
-        s = np.r_[s, strand_s[k]]
-        n_cells = len(cells)
-        n_states = n_cells + len(EXIT_LABELS)
+        return np.r_[from_state, f2], np.r_[to_state, t2], np.r_[s, self.strand_s[k]], k, ends
+
+    def build(self, name, flag, alpha, alpha_oil):
+        """Build, save and describe one oil matrix: (path, per-drifter counts, moves
+        per (drifter, from, to) for coastal_stranding)."""
+        d, args, cells = self.d, self.args, self.cells
+        from_state, to_state, s, k, (_, _, _, beached, shift_km) = self.states(flag, alpha)
+        n_cells, n_states = len(cells), self.n_states
         C = np.zeros((n_states, n_states))
         np.add.at(C, (from_state, to_state), 1)
-        pairs = np.unique(np.stack([from_state, traj_idx[s]]), axis=1)
+        pairs = np.unique(np.stack([from_state, d.traj_idx[s]]), axis=1)
         row_drifters = np.bincount(pairs[0], minlength=n_states)
-        P, empty = row_normalise(C, cells, n_lon)
+        P, empty = row_normalise(C, cells, self.grid.n_lon)
         flagged = row_drifters[:n_cells] < MIN_DRIFTERS
-        out = operator_path(name, RES, TAU, args.box)
+        out = operator_path(name, args.res, args.tau, args.box)
         np.savez_compressed(
             out, P=P, C=C,
             row_drifters=row_drifters[:n_cells], row_obs=C.sum(axis=1)[:n_cells],
             flagged=flagged, empty=np.isin(np.arange(n_cells), empty),
-            cell_flat=cells, lon_edges=lon_edges, lat_edges=lat_edges,
-            res=RES, tau_days=TAU, exit_labels=EXIT_LABELS, box=np.array(args.box),
-            drogued=drogue_flag, alpha_added=alpha, alpha_undrogued=alpha_u,
+            cell_flat=cells, lon_edges=self.grid.lon_edges, lat_edges=self.grid.lat_edges,
+            res=args.res, tau_days=args.tau, exit_labels=EXIT_LABELS, box=np.array(args.box),
+            drogued=flag, alpha_added=alpha, alpha_undrogued=self.alpha_u,
             alpha_oil=alpha_oil, decay_days=DECAY_DAYS,
-            years=np.array([years[s].min(), years[s].max()]),
-            source="NOAA GDP hourly v2.01 + ERA5 10 m wind (Copernicus CDS)",
+            years=np.array([d.year[s].min(), d.year[s].max()]), source=SOURCE,
         )
-        shift_km = np.hypot(dlon * M_PER_DEG_LON_EQ * np.cos(np.radians(lat[e])), dlat * M_PER_DEG_LAT) / 1e3
-        print(f"\n=== {name}: {'drogued' if drogue_flag else 'undrogued'} + {100 * alpha:.2f}% wind ===")
+        print(f"\n=== {name}: {'drogued' if flag else 'undrogued'} + {100 * alpha:.2f}% wind ===")
         print(f"Transitions          : {len(s):,}")
         print(f"Wind shift per step  : median {np.median(shift_km):.0f} km, 90th pct {np.percentile(shift_km, 90):.0f} km")
         print(f"Kept unshifted (land): {beached.mean():.2%}")
@@ -225,83 +232,99 @@ def main(argv=None):
         print(f"Mean exit prob / step: {P[:n_cells, n_cells:n_cells + STRANDED].sum(axis=1).mean():.1%}; "
               f"stranding {P[:n_cells, n_cells + STRANDED].mean():.2%} ({k.sum():,} stranding moves)")
         print(f"Saved → {out}")
-        # Moves per (drifter, from, to), with GDP trajectory numbers, for coastal_stranding
-        key = traj_idx[s].astype(np.int64) * n_states**2 + from_state * n_states + to_state
+        key = d.traj_idx[s].astype(np.int64) * n_states**2 + from_state * n_states + to_state
         uniq, n_moves = np.unique(key, return_counts=True)
         built = {"traj": uniq // n_states**2, "ft": uniq % n_states**2, "n": n_moves}
-        return out, drifter_counts(traj_idx[s], from_state, to_state, n_states), built
+        return out, drifter_counts(d.traj_idx[s], from_state, to_state, n_states), built
 
-    path_a, counts_a, moves_a = build("oil", False, alpha_extra, ALPHA_OIL)
-    path_b, _, moves_b = build("oil_check", True, ALPHA_OIL, ALPHA_OIL)
-    moves = {"oil": moves_a, "oil_check": moves_b}
+
+def build_all(oil, path):
+    """Oil and its check at 3.5%, then the rest of the windage range; saves every
+    matrix's moves for coastal_stranding. Returns the 3.5% oil's counts."""
+    _, counts, moves_a = oil.build("oil", False, ALPHA_OIL - oil.alpha_u, ALPHA_OIL)
+    moves = {"oil": moves_a, "oil_check": oil.build("oil_check", True, ALPHA_OIL, ALPHA_OIL)[2]}
     for name, alpha_oil in OIL_WINDAGE_RANGE.items():
         if name != "oil":
-            moves[name] = build(name, False, alpha_oil - alpha_u, alpha_oil)[2]
+            moves[name] = oil.build(name, False, alpha_oil - oil.alpha_u, alpha_oil)[2]
             check = name.replace("oil", "oil_check")
-            moves[check] = build(check, True, alpha_oil, alpha_oil)[2]
-    moves_path = f"data/oil_moves_{TAG}.npz"
-    np.savez_compressed(moves_path, **{f"{name}_{k}": v for name, m in moves.items() for k, v in m.items()},
-                        n_states=len(cells) + len(EXIT_LABELS))
+            moves[check] = oil.build(check, True, alpha_oil, alpha_oil)[2]
+    np.savez_compressed(path, **{f"{name}_{k}": v for name, m in moves.items() for k, v in m.items()},
+                        n_states=oil.n_states)
+    return counts
 
-    # ── 4. Compare undrogued, oil (A) and check (B) at the release points ────
-    ops = {"undrogued": load_operator(operator_path("undrogued", RES, TAU, args.box)),
-           "oil": load_operator(path_a), "oil_check": load_operator(path_b)}
-    n_cells = len(cells)
-    n_states = n_cells + len(EXIT_LABELS)
+
+# ── Undrogued, oil (A) and check (B) at the release points ───────────────────
+
+def oil_fates(P, starts, n_cells, tau):
+    """Share stranded after 30 days and still afloat in R after 365 days, per release point."""
+    steps = {d: int(round(d / tau)) for d in HORIZONS}
+    p = np.zeros((len(starts), P.shape[0]))
+    p[np.arange(len(starts)), starts] = 1.0
+    for step in range(1, steps[365] + 1):
+        p = p @ P
+        if step == steps[30]:
+            stranded_30 = p[:, n_cells + STRANDED].copy()
+    return stranded_30, p[:, :n_cells].sum(axis=1)
+
+
+def oil_intervals(op, counts, starts, tau, rng):
+    """Drifter bootstrap of the oil matrix, as bootstrap does for drogued and undrogued."""
+    n_cells, n_states = len(op["cell_flat"]), op["P"].shape[0]
+    n_lon = len(op["lon_edges"]) - 1
+    boot = np.empty((N_BOOT, 2, len(starts)))
+    for b in range(N_BOOT):
+        boot[b] = oil_fates(row_normalise(resampled_counts(counts, n_states, rng), op["cell_flat"], n_lon)[0],
+                            starts, n_cells, tau)
+    print(f"\nOil matrix: {counts[3]:,} drifters resampled {N_BOOT} times")
+    return np.percentile(boot, [2.5, 97.5], axis=0)
+
+
+def grounded_drifters(counts, starts, n_cells, n_states):
+    """Grounded drifters behind each release cell's own stranding moves (the same
+    moves in the undrogued and oil matrices, since stranding moves are not shifted)."""
+    d_idx, ft = counts[0], counts[1]
+    return [len(np.unique(d_idx[(ft // n_states == st) & (ft % n_states == n_cells + STRANDED)])) for st in starts]
+
+
+def undrogued_intervals(path, points):
+    """Undrogued intervals from bootstrap, or None if it has not run."""
+    if not os.path.exists(path):
+        print(f"{path} not found: run bootstrap for undrogued intervals")
+        return None
+    bt = pd.read_csv(path)
+    bt = bt[bt.drogue == "undrogued"].set_index(["metric", "days", "name"])
+    return {key: bt.loc[key[0], key[1]].reindex(points.name)[["ci_low", "ci_high"]].values
+            for key in [("exit_stranded", 30), ("in_R", 365)]}
+
+
+def point_outcomes(op, point, coast, tau):
+    """One matrix from one release point: the distribution at each horizon and the
+    material-days in coastal cells over the first 30 days."""
+    n_cells = len(op["cell_flat"])
+    steps = {d: int(round(d / tau)) for d in HORIZONS}
+    p = release(op, point.lon, point.lat)
+    exposure, dist = 0.0, {}
+    for step in range(1, max(steps.values()) + 1):
+        p = p @ op["P"]
+        if step <= steps[30]:
+            exposure += p[:n_cells][coast].sum() * tau
+        for d, k in steps.items():
+            if step == k:
+                dist[d] = p.copy()
+    return dist, exposure
+
+
+def compare_points(ops, points, tau):
+    n_cells = len(ops["oil"]["cell_flat"])
     exit_col = {lab: n_cells + k for k, lab in enumerate(ops["oil"]["exit_labels"])}
     coast = coastal_states(ops["oil"])
-    points = pd.read_csv(release_points_path(args.box))[["name", "lon", "lat"]]
-    steps = {d: int(round(d / TAU)) for d in HORIZONS}
-    release_states = np.array([state_of(ops["oil"], r.lon, r.lat) for r in points.itertuples()])
-
-    def oil_fates(P):
-        """Share stranded after 30 days and still afloat in R after 365 days, per release point."""
-        p = np.zeros((len(release_states), n_states))
-        p[np.arange(len(release_states)), release_states] = 1.0
-        for step in range(1, steps[365] + 1):
-            p = p @ P
-            if step == steps[30]:
-                stranded_30 = p[:, exit_col["stranded"]].copy()
-        return stranded_30, p[:, :n_cells].sum(axis=1)
-
-    # Drifter bootstrap of the oil matrix, as bootstrap does for drogued and undrogued
-    boot = np.empty((N_BOOT, 2, len(release_states)))
-    for b in range(N_BOOT):
-        boot[b] = oil_fates(row_normalise(resampled_counts(counts_a, n_states, rng), cells, n_lon)[0])
-    oil_lo, oil_hi = np.percentile(boot, [2.5, 97.5], axis=0)
-    print(f"\nOil matrix: {counts_a[3]:,} drifters resampled {N_BOOT} times")
-
-    # Grounded drifters behind each release cell's own stranding moves (the same
-    # moves in the undrogued and oil matrices, since stranding moves are not shifted)
-    d_idx, ft = counts_a[0], counts_a[1]
-    grounded = [len(np.unique(d_idx[(ft // n_states == st) & (ft % n_states == n_cells + STRANDED)]))
-                for st in release_states]
-
-    # Undrogued intervals come from bootstrap
-    boot_csv = f"data/bootstrap_release_{TAG}.csv"
-    und_ci = None
-    if os.path.exists(boot_csv):
-        bt = pd.read_csv(boot_csv)
-        bt = bt[bt.drogue == "undrogued"].set_index(["metric", "days", "name"])
-        und_ci = {key: bt.loc[key[0], key[1]].reindex(points.name)[["ci_low", "ci_high"]].values
-                  for key in [("exit_stranded", 30), ("in_R", 365)]}
-    else:
-        print(f"{boot_csv} not found: run bootstrap for undrogued intervals")
-
     rows = []
     for _, pt in points.iterrows():
         row = {"name": pt["name"], "lon": pt.lon, "lat": pt.lat}
         dist = {}
         for key, op in ops.items():
-            p = release(op, pt.lon, pt.lat)
-            exposure = 0.0   # material-days in coastal cells over the first 30 days
-            for step in range(1, max(steps.values()) + 1):
-                p = p @ op["P"]
-                if step <= steps[30]:
-                    exposure += p[:n_cells][coast].sum() * TAU
-                for d, k in steps.items():
-                    if step == k:
-                        dist[(key, d)] = p.copy()
+            by_day, exposure = point_outcomes(op, pt, coast, tau)
+            dist.update({(key, d): p for d, p in by_day.items()})
             p365 = dist[(key, 365)]
             row.update({f"{key}_coast_30d": exposure, f"{key}_inR_365d": p365[:n_cells].sum(),
                         f"{key}_W_365d": p365[exit_col["W"]], f"{key}_E_365d": p365[exit_col["E"]],
@@ -311,29 +334,36 @@ def main(argv=None):
             row[f"tvd_oil_check_{d}d"] = 0.5 * np.abs(dist[("oil", d)] - dist[("oil_check", d)]).sum()
             row[f"tvd_oil_undrogued_{d}d"] = 0.5 * np.abs(dist[("oil", d)] - dist[("undrogued", d)]).sum()
         rows.append(row)
-    cmp_ = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
+
+
+def add_intervals(cmp_, grounded, oil_ci, und_ci):
     cmp_["grounded_drifters_in_cell"] = grounded
     cmp_["method_flag"] = cmp_["tvd_oil_check_30d"] > DISAGREE_TVD
+    oil_lo, oil_hi = oil_ci
     for j, (metric, col) in enumerate([("stranded_30d", "exit_stranded"), ("inR_365d", "in_R")]):
         cmp_[f"oil_{metric}_lo"], cmp_[f"oil_{metric}_hi"] = oil_lo[j], oil_hi[j]
         if und_ci is not None:
             days = 30 if metric == "stranded_30d" else 365
             ci = und_ci[(col, days)]
             cmp_[f"undrogued_{metric}_lo"], cmp_[f"undrogued_{metric}_hi"] = ci[:, 0], ci[:, 1]
-    cmp_.to_csv(f"data/oil_compare_{TAG}.csv", index=False)
 
+
+def print_compare(cmp_, keys):
     print("\nRelease points — 30-day coastal exposure (material-days) and stranding, 1-year fate, A vs B distance")
     print(f"{'':<28}{'coast 30 d':^24}{'stranded 30 d':^24}{'in R 1 yr':^24}{'exit W 1 yr':^24}{'TVD A–B':^14}")
     print(f"{'':<28}" + f"{'undr':>8}{'oil A':>8}{'chk B':>8}" * 4 + f"{'7 d':>7}{'30 d':>7}")
     for _, r in cmp_.iterrows():
         flag = "  ⚠" if r.method_flag else ""
         print(f"{r['name'][:27]:<28}"
-              + "".join(f"{r[f'{k}_coast_30d']:>8.1f}" for k in ops)
-              + "".join(f"{100 * r[f'{k}_stranded_30d']:>7.1f}%" for k in ops)
-              + "".join(f"{100 * r[f'{k}_inR_365d']:>7.0f}%" for k in ops)
-              + "".join(f"{100 * r[f'{k}_W_365d']:>7.0f}%" for k in ops)
+              + "".join(f"{r[f'{k}_coast_30d']:>8.1f}" for k in keys)
+              + "".join(f"{100 * r[f'{k}_stranded_30d']:>7.1f}%" for k in keys)
+              + "".join(f"{100 * r[f'{k}_inR_365d']:>7.0f}%" for k in keys)
+              + "".join(f"{100 * r[f'{k}_W_365d']:>7.0f}%" for k in keys)
               + f"{r.tvd_oil_check_7d:>7.2f}{r.tvd_oil_check_30d:>7.2f}{flag}")
 
+
+def print_intervals(cmp_):
     def ci(r, key, metric):
         lo, hi = r.get(f"{key}_{metric}_lo", np.nan), r.get(f"{key}_{metric}_hi", np.nan)
         return f"{100 * r[f'{key}_{metric}']:.0f}% ({100 * lo:.0f}–{100 * hi:.0f})"
@@ -347,41 +377,70 @@ def main(argv=None):
               + f"{r.grounded_drifters_in_cell:>9}")
     print(f"\nSurface oil remaining (exp(−t/{DECAY_DAYS:g} d)): "
           + ", ".join(f"{d} d {np.exp(-d / DECAY_DAYS):.1%}" for d in HORIZONS))
-    print(f"⚠ = A and B differ by TVD > {DISAGREE_TVD} at 30 d (method_flag). Saved → data/oil_compare_{TAG}.csv, {moves_path}")
 
-    # ── 5. Map: 30-day distribution from Durban for the three matrices ───────
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
-        subplot_kw = {"projection": ccrs.PlateCarree()}
-    except ImportError:
-        ccrs = None
-        subplot_kw = {}
-    kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
-    shown = points[points["name"] == "Durban"]   # the first release point in a box without Durban
-    shown = (shown if len(shown) else points).iloc[0]
-    titles = {"undrogued": f"Undrogued ({100 * alpha_u:.1f}% wind, measured)", "oil": f"Oil A: undrogued + {100 * alpha_extra:.1f}% wind",
+
+# ── Map: 30-day distribution from one release point for the three matrices ───
+
+def shown_point(points):
+    """Durban, or the first release point in a box without Durban."""
+    shown = points[points["name"] == "Durban"]
+    return (shown if len(shown) else points).iloc[0]
+
+
+def plot_release(ops, shown, alpha_u, args, path):
+    titles = {"undrogued": f"Undrogued ({100 * alpha_u:.1f}% wind, measured)",
+              "oil": f"Oil A: undrogued + {100 * (ALPHA_OIL - alpha_u):.1f}% wind",
               "oil_check": f"Check B: drogued + {100 * ALPHA_OIL:.1f}% wind"}
-    fig, axes = plt.subplots(1, 3, figsize=(18, 4.3), subplot_kw=subplot_kw)
+    fig, axes = plt.subplots(1, 3, figsize=(18, 4.3), subplot_kw=MAP_KW)
     for ax, (key, op) in zip(axes, ops.items()):
+        n_cells = len(op["cell_flat"])
         p = propagate(op, release(op, shown.lon, shown.lat), days=30)
         grid = to_grid(op, p)
-        mesh = ax.pcolormesh(lon_edges, lat_edges, np.where(grid > 0, grid, np.nan), cmap="Blues",
-                             norm=LogNorm(1e-4, 1e-1), **kw)
-        ax.plot(shown.lon, shown.lat, marker="*", ms=12, color="#e8710a", mec="#222222", **kw)
-        if ccrs:
-            ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
-            ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
-            ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
+        mesh = ax.pcolormesh(op["lon_edges"], op["lat_edges"], np.where(grid > 0, grid, np.nan), cmap="Blues",
+                             norm=LogNorm(1e-4, 1e-1), **TRANSFORM_KW)
+        ax.plot(shown.lon, shown.lat, marker="*", ms=12, color="#e8710a", mec="#222222", **TRANSFORM_KW)
+        map_axes(ax, args.box)
         ax.set_title(f"{titles[key]}\nafloat in R {p[:n_cells].sum():.0%}, stranded {p[n_cells + STRANDED]:.0%}",
                      fontsize=10)
     cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="both")
     cb.set_label("Probability per 1° cell after 30 days (log)")
     fig.suptitle(f"{shown['name']} release after 30 days — undrogued, oil (A) and check (B)", fontsize=12)
-    out = f"figures/{region_prefix(args.data)}_oil_{re.sub(r'[^a-z0-9]+', '_', shown['name'].lower()).strip('_')}_30d_{TAG}.png"
-    plt.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"Map saved → {out}")
-    plt.close()
+    save_figure(path)
+
+
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    tag = setting_tag(args.res, args.tau, args.box)
+    out_moves = f"data/oil_moves_{tag}.npz"
+    out_compare = f"data/oil_compare_{tag}.csv"
+
+    moves = MoveSet(Drifters(args.data), args.box, args.res, args.tau)
+    u10, v10 = load_winds(wind_paths(args.data)[1], args.data, len(moves.drifters.lon))
+    print(f"Wind available at {np.isfinite(u10[moves.in_R]).mean():.1%} of positions in R")
+    rng = np.random.default_rng(SEED)
+    alpha_u = measure_alpha(SlipFit(moves, u10, v10), moves.grid, rng)
+    oil = OilMoves(moves, u10, v10, alpha_u, args)
+    counts = build_all(oil, out_moves)
+
+    ops = {name: load_operator(operator_path(name, args.res, args.tau, args.box))
+           for name in ["undrogued", "oil", "oil_check"]}
+    points = pd.read_csv(release_points_path(args.box))[["name", "lon", "lat"]]
+    starts = np.array([state_of(ops["oil"], r.lon, r.lat) for r in points.itertuples()])
+    oil_ci = oil_intervals(ops["oil"], counts, starts, args.tau, rng)
+    grounded = grounded_drifters(counts, starts, len(oil.cells), oil.n_states)
+    und_ci = undrogued_intervals(f"data/bootstrap_release_{tag}.csv", points)
+    cmp_ = compare_points(ops, points, args.tau)
+    add_intervals(cmp_, grounded, oil_ci, und_ci)
+    cmp_.to_csv(out_compare, index=False)
+    print_compare(cmp_, list(ops))
+    print_intervals(cmp_)
+    print(f"⚠ = A and B differ by TVD > {DISAGREE_TVD} at 30 d (method_flag). Saved → {out_compare}, {out_moves}")
+
+    shown = shown_point(points)
+    slug = re.sub(r"[^a-z0-9]+", "_", shown["name"].lower()).strip("_")
+    out_png = f"figures/{region_prefix(args.data)}_oil_{slug}_30d_{tag}.png"
+    plot_release(ops, shown, alpha_u, args, out_png)
+    print(f"Map saved → {out_png}")
 
 
 if __name__ == "__main__":

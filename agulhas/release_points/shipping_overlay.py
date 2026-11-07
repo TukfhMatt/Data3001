@@ -17,22 +17,19 @@ the same points. Hotspots in unreliable cells are moved to the nearest
 reliable cell and the shift is reported.
 """
 
-import os
-import zipfile
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
-from matplotlib.colors import LogNorm
-import rasterio
-from rasterio.windows import from_bounds
-import xarray as xr
-
-from agulhas.config import (SHIP_URL, SHIP_ZIP, DROGUE_TYPES, MIN_DRIFTERS, box_tag, grid_shape, operator_path, parse_args, place_label,
-                    region_prefix, release_points_path, setting_tag)
-from agulhas.transport import coastal_states, load_operator, propagate, state_of
 import matplotlib.patheffects as pe
+from matplotlib.colors import LogNorm
+
+from agulhas.config import (DROGUE_TYPES, MIN_DRIFTERS, box_tag, operator_path, parse_args,
+                            place_label, region_prefix, release_points_path, setting_tag)
+from agulhas.drifters import Drifters, in_box
+from agulhas.grid import Grid
+from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
+from agulhas.shipping import blocks, read_window
+from agulhas.transport import coastal_states, load_operator, propagate, state_of
 
 FINE = 0.1           # display grid for the shipping map
 MIN_CURRENT_OBS = 300  # cells with fewer hourly obs of a drogue type get no current arrow
@@ -50,118 +47,80 @@ HOTSPOTS = {
 LABELS = {"drogued": "drogued drifters, 15 m current", "undrogued": "undrogued drifters, current + wind slip"}
 
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+# ── Shipping density ─────────────────────────────────────────────────────────
 
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    RES = args.res       # analysis grid (matches the transition matrix)
-
-    os.makedirs("figures", exist_ok=True)
-
-    # ── 1. Shipping density ──────────────────────────────────────────────────
-    if not os.path.exists(SHIP_ZIP):
-        raise SystemExit(f"{SHIP_ZIP} not found — download it first:\n"
-                         f"  curl -L -o {SHIP_ZIP} {SHIP_URL}")
-
-    with zipfile.ZipFile(SHIP_ZIP) as z:
-        tif = next(n for n in z.namelist() if n.lower().endswith((".tif", ".tiff")))
-
-    with rasterio.open(f"zip://{SHIP_ZIP}!/{tif}") as src:
-        window = from_bounds(LON_MIN, LAT_MIN, LON_MAX, LAT_MAX, src.transform).round_offsets().round_lengths()
-        raw = src.read(1, window=window).astype(np.float64)
-        nodata = src.nodata
-        px = src.res[0]
-
-    if nodata is not None:
-        raw[raw == nodata] = 0
-    raw[~np.isfinite(raw) | (raw < 0)] = 0
-    raw = raw[::-1]  # raster rows run north→south; flip so row 0 is LAT_MIN
-
-    def block_sum(a, deg):
-        """Sum pixels into deg-sized cells; a partial last row/column (box side
-    not a multiple of deg) is zero-padded so it keeps the pixels it has."""
-        k = int(round(deg / px))
-        ny, nx = -(-a.shape[0] // k), -(-a.shape[1] // k)
-        a = np.pad(a, ((0, ny * k - a.shape[0]), (0, nx * k - a.shape[1])))
-        return a.reshape(ny, k, nx, k).sum(axis=(1, 3))
-
-    ship_fine = block_sum(raw, FINE)
-    n_lon, n_lat = grid_shape(args.box, RES)
-    # Cell centres; a partial last row/column is centred inside the box
-    CELL_LON = (np.minimum(LON_MIN + np.arange(n_lon) * RES, LON_MAX)
-                + np.minimum(LON_MIN + np.arange(1, n_lon + 1) * RES, LON_MAX)) / 2
-    CELL_LAT = (np.minimum(LAT_MIN + np.arange(n_lat) * RES, LAT_MAX)
-                + np.minimum(LAT_MIN + np.arange(1, n_lat + 1) * RES, LAT_MAX)) / 2
-    ship_grid = block_sum(raw, RES)[:n_lat, :n_lon]   # drop any stray rounding pixels
-    del raw
+def load_shipping(grid):
+    """Shipping density summed on the display grid and on the analysis grid."""
+    raw, px, tif = read_window(grid.box)
+    ship_fine = blocks(raw, FINE, px).sum(axis=(1, 3))
+    ship_grid = blocks(raw, grid.res, px).sum(axis=(1, 3))[:grid.n_lat, :grid.n_lon]   # drop any stray rounding pixels
     print(f"Shipping raster: {tif}, pixel {px:.4f}° (values used as relative density)")
+    return ship_fine, ship_grid
 
-    # ── 2. Mean current per drogue type ──────────────────────────────────────
-    ds = xr.open_dataset(args.data)
-    lon = ds["lon"].values.astype(float)
-    lat = ds["lat"].values.astype(float)
-    ve = ds["ve"].values.astype(float)
-    vn = ds["vn"].values.astype(float)
-    drogue = ds["drogue_status"].values.astype(bool)
 
-    in_box =((lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
-              & np.isfinite(ve) & np.isfinite(vn))
+# ── Mean current per drogue type ─────────────────────────────────────────────
+
+def mean_currents(drifters, grid):
+    """Per drogue type: mean east and north velocity per cell (NaN under
+    MIN_CURRENT_OBS), and the hourly observations behind each cell."""
+    ve, vn = drifters.ve, drifters.vn
+    inside = in_box(drifters.lon, drifters.lat, grid.box) & np.isfinite(ve) & np.isfinite(vn)
+    shape = (grid.n_lat, grid.n_lon)
     currents = {}
     for name, flag in DROGUE_TYPES.items():
-        m = in_box & (drogue == flag)
-        cell = ((lat[m] - LAT_MIN) // RES).astype(int) * n_lon + ((lon[m] - LON_MIN) // RES).astype(int)
-        cnt = np.bincount(cell, minlength=n_lat * n_lon)
-        u = np.bincount(cell, ve[m], n_lat * n_lon) / np.maximum(cnt, 1)
-        v = np.bincount(cell, vn[m], n_lat * n_lon) / np.maximum(cnt, 1)
+        m = inside & (drifters.drogue == flag)
+        cell = grid.cell_in_box(drifters.lon[m], drifters.lat[m])
+        cnt = np.bincount(cell, minlength=grid.n_cells)
+        u = np.bincount(cell, ve[m], grid.n_cells) / np.maximum(cnt, 1)
+        v = np.bincount(cell, vn[m], grid.n_cells) / np.maximum(cnt, 1)
         ok = cnt >= MIN_CURRENT_OBS
-        u, v = np.where(ok, u, np.nan).reshape(n_lat, n_lon), np.where(ok, v, np.nan).reshape(n_lat, n_lon)
-        currents[name] = (u, v, cnt.reshape(n_lat, n_lon))
+        u, v = np.where(ok, u, np.nan).reshape(shape), np.where(ok, v, np.nan).reshape(shape)
+        currents[name] = (u, v, cnt.reshape(shape))
         print(f"Mean current ({name}): {ok.sum()} cells, max speed {np.nanmax(np.hypot(u, v)):.2f} m/s")
-    del lon, lat, ve, vn, drogue
+    return currents
 
-    # ── 3. Candidate release points ──────────────────────────────────────────
-    ops = {name: load_operator(operator_path(name, RES, args.tau, args.box)) for name in DROGUE_TYPES}
+
+# ── Candidate release points ─────────────────────────────────────────────────
+
+def cell_masks(ops, grid):
+    """On the grid: ocean cells, near-shore cells (ocean cells with a non-ocean
+    neighbour, which stand in for coastal impact) and cells reliable in both
+    matrices (enough drifters behind the row, and real outgoing data)."""
     op = ops["drogued"]   # both operators share the same ocean cells
-    n_cells = len(op["cell_flat"])
-    is_ocean = np.zeros(n_lat * n_lon, bool)
-    is_ocean[op["cell_flat"]] = True
-    ocean_grid = is_ocean.reshape(n_lat, n_lon)
+    masks = {}
+    for key, values in [("ocean", True), ("coastal", coastal_states(op)),
+                        ("reliable", np.logical_and.reduce([~o["flagged"] & ~o["empty"] for o in ops.values()]))]:
+        flat = np.zeros(grid.n_cells, bool)
+        flat[op["cell_flat"]] = values
+        masks[key] = flat.reshape(grid.n_lat, grid.n_lon)
+    return masks
 
-    # Near-shore cells: ocean cells with a non-ocean neighbour inside the grid
-    # (the matrix has no beaching state, so these stand in for coastal impact)
-    coastal_state = coastal_states(op)
-    coastal_grid = np.zeros(n_lat * n_lon, bool)
-    coastal_grid[op["cell_flat"]] = coastal_state
-    coastal_grid = coastal_grid.reshape(n_lat, n_lon)
 
-    # Reliable cells: enough drifters behind the row, and real outgoing data,
-    # in both matrices
-    reliable = np.zeros(n_lat * n_lon, bool)
-    reliable[op["cell_flat"]] = np.logical_and.reduce([~o["flagged"] & ~o["empty"] for o in ops.values()])
-    reliable_grid = reliable.reshape(n_lat, n_lon)
+def snap_to_reliable(lo, la, reliable_grid, grid):
+    """Centre of the nearest reliable cell to (lo, la) and the distance in km."""
+    jj, ii = np.nonzero(reliable_grid)
+    cx, cy = grid.lon_centres[ii], grid.lat_centres[jj]
+    dx = (cx - lo) * 111.32 * np.cos(np.radians(la))
+    dy = (cy - la) * 110.57
+    k = np.argmin(dx ** 2 + dy ** 2)
+    return cx[k], cy[k], float(np.hypot(dx[k], dy[k]))
 
-    def snap_to_reliable(lo, la):
-        """Centre of the nearest reliable cell to (lo, la) and the distance in km."""
-        jj, ii = np.nonzero(reliable_grid)
-        cx, cy = CELL_LON[ii], CELL_LAT[jj]
-        dx = (cx - lo) * 111.32 * np.cos(np.radians(la))
-        dy = (cy - la) * 110.57
-        k = np.argmin(dx ** 2 + dy ** 2)
-        return cx[k], cy[k], float(np.hypot(dx[k], dy[k]))
 
+def pick_candidates(grid, reliable_grid, ship_grid):
+    """Known hotspots inside the box, moved to reliable cells, then the busiest
+    reliable shipping cells at least MIN_SPACING apart: (kind, name, lon, lat)."""
     print(f"\nHotspots moved to the nearest cell reliable in both matrices "
           f"(≥ {MIN_DRIFTERS} drifters, has outgoing data):")
     candidates = []
     for name, (lo, la) in HOTSPOTS.items():
-        if not (LON_MIN <= lo < LON_MAX and LAT_MIN <= la < LAT_MAX):
+        if not in_box(lo, la, grid.box):
             continue
-        j, i = int((la - LAT_MIN) // RES), int((lo - LON_MIN) // RES)
+        j, i = int((la - grid.lat_min) // grid.res), int((lo - grid.lon_min) // grid.res)
         if reliable_grid[j, i]:
-            clo, cla = CELL_LON[i], CELL_LAT[j]
+            clo, cla = grid.lon_centres[i], grid.lat_centres[j]
             print(f"  {name:<28} unchanged")
         else:
-            clo, cla, km = snap_to_reliable(lo, la)
+            clo, cla, km = snap_to_reliable(lo, la, reliable_grid, grid)
             print(f"  {name:<28} ({lo}, {la}) → ({clo:.1f}, {cla:.1f}), ~{km:.0f} km")
         candidates.append(("hotspot", name, clo, cla))
 
@@ -169,46 +128,54 @@ def main(argv=None):
     for flat in np.argsort(traffic)[::-1]:
         if len([c for c in candidates if c[0] == "traffic"]) == N_TRAFFIC:
             break
-        j, i = divmod(flat, n_lon)
-        clo, cla = CELL_LON[i], CELL_LAT[j]
+        j, i = divmod(flat, grid.n_lon)
+        clo, cla = grid.lon_centres[i], grid.lat_centres[j]
         if all(max(abs(clo - c[2]), abs(cla - c[3])) >= MIN_SPACING for c in candidates):
             candidates.append(("traffic", f"Lane {place_label(clo, cla)}", clo, cla))
+    return candidates
 
-    def fate(o, s):
-        """Coastal exposure over 30 days and state after 1 year, released in state s."""
-        tau = float(o["tau_days"])
-        week_step = int(round(7 / tau))
-        p = np.zeros(o["P"].shape[0]); p[s] = 1.0
-        exposure, coast_7, c = 0.0, 0.0, 0.0
-        for step in range(1, int(round(30 / tau)) + 1):
-            p = p @ o["P"]
-            c = p[:n_cells][coastal_state].sum()
-            exposure += c * tau
-            if step == week_step:
-                coast_7 = c
-        p365 = propagate(o, np.eye(o["P"].shape[0])[s], days=365)
-        return {"coastal_frac_7d": coast_7, "coastal_frac_30d": c,
-                "coastal_exposure_days_30d": exposure, "in_R_365d": p365[:n_cells].sum(),
-                **{f"exit_{l}_365d": v for l, v in zip(o["exit_labels"], p365[n_cells:])},
-                "row_drifters": int(o["row_drifters"][s])}
 
+def fate(o, s, coastal_state):
+    """Coastal exposure over 30 days and state after 1 year, released in state s."""
+    n_cells = len(o["cell_flat"])
+    tau = float(o["tau_days"])
+    week_step = int(round(7 / tau))
+    p = np.zeros(o["P"].shape[0])
+    p[s] = 1.0
+    exposure, coast_7, c = 0.0, 0.0, 0.0
+    for step in range(1, int(round(30 / tau)) + 1):
+        p = p @ o["P"]
+        c = p[:n_cells][coastal_state].sum()
+        exposure += c * tau
+        if step == week_step:
+            coast_7 = c
+    p365 = propagate(o, np.eye(o["P"].shape[0])[s], days=365)
+    return {"coastal_frac_7d": coast_7, "coastal_frac_30d": c,
+            "coastal_exposure_days_30d": exposure, "in_R_365d": p365[:n_cells].sum(),
+            **{f"exit_{l}_365d": v for l, v in zip(o["exit_labels"], p365[n_cells:])},
+            "row_drifters": int(o["row_drifters"][s])}
+
+
+def rank_candidates(candidates, ops, masks, ship_grid, grid):
+    """Shipping and the fate under each matrix of every candidate, ranked by drogued coastal exposure."""
+    op = ops["drogued"]
+    coastal_state = coastal_states(op)
     rows = []
     for kind, name, lo, la in candidates:
         s = state_of(op, lo, la)
-        j, i = divmod(int(op["cell_flat"][s]), n_lon)
+        j, i = divmod(int(op["cell_flat"][s]), grid.n_lon)
         row = {"kind": kind, "name": name, "lon": lo, "lat": la,
                "ship_density": ship_grid[j, i],
-               "ship_density_rel": ship_grid[j, i] / ship_grid[ocean_grid].max(),
-               "start_coastal": bool(coastal_grid[j, i])}
+               "ship_density_rel": ship_grid[j, i] / ship_grid[masks["ocean"]].max(),
+               "start_coastal": bool(masks["coastal"][j, i])}
         for dname, o in ops.items():
-            row.update({f"{dname}_{k}": v for k, v in fate(o, s).items()})
+            row.update({f"{dname}_{k}": v for k, v in fate(o, s, coastal_state).items()})
         rows.append(row)
+    return pd.DataFrame(rows).sort_values("drogued_coastal_exposure_days_30d", ascending=False)
 
-    table = pd.DataFrame(rows).sort_values("drogued_coastal_exposure_days_30d", ascending=False)
-    points_out = release_points_path(args.box, RES, args.tau)
-    table.to_csv(points_out, index=False)
 
-    print(f"\nCandidate release points ({RES:g}°, τ = {args.tau:g} d), ranked by drogued coastal exposure")
+def print_candidates(table, res, tau):
+    print(f"\nCandidate release points ({res:g}°, τ = {tau:g} d), ranked by drogued coastal exposure")
     print("ship = density relative to the busiest cell in R; coastal = ocean cells next to land;")
     print("exposure = material-days spent in coastal cells over the first 30 days\n")
     show = table[["kind", "name", "lon", "lat", "ship_density_rel", "start_coastal"]
@@ -219,77 +186,80 @@ def main(argv=None):
         "ship": "{:.0%}".format,
         "exp_30d_dro": "{:.1f}".format, "exp_30d_und": "{:.1f}".format,
         "inR_365d_dro": "{:.0%}".format, "inR_365d_und": "{:.0%}".format}))
-    print(f"\nTable saved → {points_out}")
 
-    ship_out = f"data/shipping_{setting_tag(RES, args.tau, args.box)}.npz"
-    np.savez_compressed(ship_out, ship=ship_grid, ship_fine=ship_fine,
+
+def save_shipping(path, ship_grid, ship_fine, currents, masks, grid):
+    np.savez_compressed(path, ship=ship_grid, ship_fine=ship_fine,
                         **{f"{k}_{d}": a for d, c in currents.items()
                            for k, a in zip(("u", "v", "current_obs"), c)},
-                        coastal=coastal_grid, lon_min=LON_MIN, lat_min=LAT_MIN,
-                        res=RES, fine=FINE)
-    print(f"Shipping and currents saved → {ship_out}")
+                        coastal=masks["coastal"], lon_min=grid.lon_min, lat_min=grid.lat_min,
+                        res=grid.res, fine=FINE)
 
-    # ── 4. Maps (one per drogue type) ────────────────────────────────────────
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
-        subplot_kw = {"projection": ccrs.PlateCarree()}
-    except ImportError:
-        ccrs = None
-        subplot_kw = {}
-    kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
 
-    fine_lon = np.arange(ship_fine.shape[1] + 1) * FINE + LON_MIN
-    fine_lat = np.arange(ship_fine.shape[0] + 1) * FINE + LAT_MIN
+# ── Maps (one per drogue type) ───────────────────────────────────────────────
+
+def plot_shipping_map(table, ship_fine, current, dname, grid, tau, path):
+    u, v, _ = current
+    fine_lon = np.arange(ship_fine.shape[1] + 1) * FINE + grid.lon_min
+    fine_lat = np.arange(ship_fine.shape[0] + 1) * FINE + grid.lat_min
     # Relative to the busiest 0.1° cell; colour range clipped to percentiles of
     # non-zero cells so the lanes stand out from the broad background
     rel = np.where(ship_fine > 0, ship_fine / ship_fine.max(), np.nan)
     lo_c, hi_c = np.nanpercentile(rel, [60, 99.5])
-    cx, cy = CELL_LON, CELL_LAT
-    thin = max(1, int(round(2 / RES)))   # one arrow per ~2°
+    thin = max(1, int(round(2 / grid.res)))   # one arrow per ~2°
     sub = (slice(None, None, thin), slice(None, None, thin))
     halo = [pe.withStroke(linewidth=3, foreground="white")]
 
-    for dname, (u, v, _) in currents.items():
-        fig, ax = plt.subplots(figsize=(13, 9), subplot_kw=subplot_kw)
-        mesh = ax.pcolormesh(fine_lon, fine_lat, rel, cmap="Blues",
-                             norm=LogNorm(vmin=lo_c, vmax=hi_c), **kw)
-        q = ax.quiver(cx[sub[1]], cy[sub[0]], u[sub], v[sub], color="#3a3a3a", alpha=0.85,
-                      scale=10, width=0.0025, zorder=4, **kw)
-        ax.quiverkey(q, 0.40, 0.93, 0.5, "0.5 m/s mean current", labelpos="E",
-                     coordinates="axes", fontproperties={"size": 9})
+    fig, ax = plt.subplots(figsize=(13, 9), subplot_kw=MAP_KW)
+    mesh = ax.pcolormesh(fine_lon, fine_lat, rel, cmap="Blues", norm=LogNorm(vmin=lo_c, vmax=hi_c), **TRANSFORM_KW)
+    q = ax.quiver(grid.lon_centres[sub[1]], grid.lat_centres[sub[0]], u[sub], v[sub], color="#3a3a3a", alpha=0.85,
+                  scale=10, width=0.0025, zorder=4, **TRANSFORM_KW)
+    ax.quiverkey(q, 0.40, 0.93, 0.5, "0.5 m/s mean current", labelpos="E",
+                 coordinates="axes", fontproperties={"size": 9})
+    for kind, marker, face, label in [("hotspot", "*", "#e8710a", "Known hotspot (moved to nearest reliable cell)"),
+                                      ("traffic", "o", "#ffffff", "Busiest shipping cell (reliable cells only)")]:
+        sel = table[table["kind"] == kind]
+        ax.scatter(sel["lon"], sel["lat"], marker=marker, s=180 if marker == "*" else 70,
+                   c=face, edgecolor="#222222", linewidth=1, zorder=6, label=label, **TRANSFORM_KW)
+    col = f"{dname}_coastal_exposure_days_30d"
+    for _, r in table.iterrows():
+        text = f"{r['name']}  {r[col]:.1f} d" if r["kind"] == "hotspot" else f"{r[col]:.1f} d"
+        # A label beside the box's east edge goes to the left of its point, or the edge would cut it
+        ax.annotate(text, (r["lon"], r["lat"]), xytext=(-26, -12) if r["lon"] > grid.lon_max - 2 else (7, -12),
+                    textcoords="offset points", fontsize=8, color="#222222", zorder=7, path_effects=halo)
+    map_axes(ax, grid.box, gridlines=True)
+    cb = fig.colorbar(mesh, ax=ax, shrink=0.7, pad=0.02, extend="both")
+    cb.set_label("Commercial ship density relative to busiest 0.1° cell, AIS 2015–2021 (log)")
+    ax.legend(loc="lower left", fontsize=9)
+    ax.set_title(f"Commercial shipping and mean current ({LABELS[dname]}) — {box_tag(grid.box)}\n"
+                 f"Labels: material-days spent in near-shore cells over the first 30 days after release "
+                 f"({grid.res:g}°, τ = {tau:g} d)", fontsize=11)
+    save_figure(path)
 
-        for kind, marker, face, label in [("hotspot", "*", "#e8710a", "Known hotspot (moved to nearest reliable cell)"),
-                                          ("traffic", "o", "#ffffff", "Busiest shipping cell (reliable cells only)")]:
-            sel = table[table["kind"] == kind]
-            ax.scatter(sel["lon"], sel["lat"], marker=marker, s=180 if marker == "*" else 70,
-                       c=face, edgecolor="#222222", linewidth=1, zorder=6, label=label, **kw)
-        col = f"{dname}_coastal_exposure_days_30d"
-        for _, r in table.iterrows():
-            text = f"{r['name']}  {r[col]:.1f} d" if r["kind"] == "hotspot" else f"{r[col]:.1f} d"
-            # A label beside the box's east edge goes to the left of its point, or the edge would cut it
-            ax.annotate(text, (r["lon"], r["lat"]), xytext=(-26, -12) if r["lon"] > LON_MAX - 2 else (7, -12),
-                        textcoords="offset points",
-                        fontsize=8, color="#222222", zorder=7, path_effects=halo)
 
-        if ccrs:
-            ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
-            ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
-            ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
-            gl = ax.gridlines(draw_labels=True, linewidth=0.3, color="gray", alpha=0.5)
-            gl.top_labels = gl.right_labels = False
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    tag = setting_tag(args.res, args.tau, args.box)
+    points_out = release_points_path(args.box, args.res, args.tau)
+    ship_out = f"data/shipping_{tag}.npz"
+    grid = Grid(args.box, args.res)
 
-        cb = fig.colorbar(mesh, ax=ax, shrink=0.7, pad=0.02, extend="both")
-        cb.set_label("Commercial ship density relative to busiest 0.1° cell, AIS 2015–2021 (log)")
-        ax.legend(loc="lower left", fontsize=9)
-        ax.set_title(f"Commercial shipping and mean current ({LABELS[dname]}) — {box_tag(args.box)}\n"
-                     f"Labels: material-days spent in near-shore cells over the first 30 days after release "
-                     f"({RES:g}°, τ = {args.tau:g} d)", fontsize=11)
+    ship_fine, ship_grid = load_shipping(grid)
+    currents = mean_currents(Drifters(args.data), grid)
+    ops = {name: load_operator(operator_path(name, args.res, args.tau, args.box)) for name in DROGUE_TYPES}
+    masks = cell_masks(ops, grid)
+    candidates = pick_candidates(grid, masks["reliable"], ship_grid)
+    table = rank_candidates(candidates, ops, masks, ship_grid, grid)
+    table.to_csv(points_out, index=False)
+    print_candidates(table, args.res, args.tau)
+    print(f"\nTable saved → {points_out}")
+    save_shipping(ship_out, ship_grid, ship_fine, currents, masks, grid)
+    print(f"Shipping and currents saved → {ship_out}")
 
-        out = f"figures/{region_prefix(args.data)}_shipping_currents_{dname}_{setting_tag(RES, args.tau, args.box)}.png"
-        plt.savefig(out, dpi=150, bbox_inches="tight")
+    for dname, current in currents.items():
+        out = f"figures/{region_prefix(args.data)}_shipping_currents_{dname}_{tag}.png"
+        plot_shipping_map(table, ship_fine, current, dname, grid, args.tau, out)
         print(f"Map saved → {out}")
-        plt.close()
 
 
 if __name__ == "__main__":

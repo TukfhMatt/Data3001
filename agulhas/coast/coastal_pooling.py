@@ -15,7 +15,7 @@ coastal_coverage use the model-neighbour coastal definition.
 The pooling is deliberately separate from the main transition operator.
 It does not overwrite P. Instead it creates a shared coastal segmentation
 for drogued and undrogued drifters that can be used for coastal-risk
-summaries and the Week 6 traffic-weighted coastal-segment analysis.
+summaries and the traffic-weighted coastal-segment analysis in traffic_exposure.
 
 Segments are built along the coastal-cell adjacency graph. Starting from
 individual coastal cells, a segment with fewer than MIN_DRIFTERS distinct
@@ -33,593 +33,430 @@ Baseline run:
 """
 
 import os
-import matplotlib
 
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import xarray as xr
-from agulhas.config import DROGUE_TYPES, MIN_DRIFTERS, operator_path, parse_args, region_prefix, setting_tag
+import matplotlib.pyplot as plt
 
-from agulhas.transport import (
-    EXIT_LABELS,
-    cell_centres,
-    coastal_states,
-    load_operator,
-    move_indices,
-    same_drogue,
-    strand_times,
-)
+from agulhas.config import DROGUE_TYPES, MIN_DRIFTERS, operator_path, parse_args, region_prefix, setting_tag
+from agulhas.drifters import Drifters
+from agulhas.moves import MoveSet
+from agulhas.plotting import save_figure
+from agulhas.transport import EXIT_LABELS, cell_centres, coastal_states, load_operator
 
 # Maximum number of neighbouring 1° coastal cells allowed in one pooled
 # segment. This prevents very sparse coastlines from collapsing into one
 # extremely long segment.
 MAX_POOL_CELLS = 4
+COAST_DEFINITION = "original_model_neighbours_and_NaturalEarth50m_land_8neighbours"
 
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    # ── 1. Settings ───────────────────────────────────────────────────────────
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
-    RES = args.res
-    TAU = args.tau
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    TAG = setting_tag(RES, TAU, args.box)
-    CELL_FILE = f"data/coastal_pooling_cells_{TAG}.csv"
-    SEGMENT_FILE = f"data/coastal_pooling_segments_{TAG}.csv"
-    SUMMARY_FILE = f"data/coastal_pooling_summary_{TAG}.csv"
-    MAPPING_FILE = f"data/coastal_segments_{TAG}.npz"
-    FIGURE_FILE = f"figures/{region_prefix(args.data)}_coastal_pooling_{TAG}.png"
-    os.makedirs("data", exist_ok=True)
-    os.makedirs("figures", exist_ok=True)
+def print_header(args):
     print("========================================")
     print("COASTAL CELL POOLING")
     print("========================================")
     print(f"Region              : {args.box}")
-    print(f"Grid                : {RES:g}°")
-    print(f"Lag                 : {TAU:g} days")
+    print(f"Grid                : {args.res:g}°")
+    print(f"Lag                 : {args.tau:g} days")
     print(f"Reliability target  : {MIN_DRIFTERS} distinct drifters")
     print(f"Maximum segment size: {MAX_POOL_CELLS} coastal cells")
 
-    # ── 2. Load annual operators ──────────────────────────────────────────────
+
+def load_ops(args):
+    """Both drogue types' matrices, which must share their ocean and absorbing states."""
     ops = {}
-
     for name in DROGUE_TYPES:
-        path = operator_path(name, RES, TAU, args.box)
-
+        path = operator_path(name, args.res, args.tau, args.box)
         if not os.path.exists(path):
-            raise SystemExit(
-                f"\nMissing {path}\n"
-                f"Build the annual matrix first with:\n"
-                f"  python -m agulhas transition_matrix "
-                f"--res {RES:g} --tau {TAU:g}"
-            )
-
+            raise SystemExit(f"\nMissing {path}\nBuild the annual matrix first with:\n"
+                             f"  python -m agulhas transition_matrix --res {args.res:g} --tau {args.tau:g}")
         ops[name] = load_operator(path)
-
-    reference_name = next(iter(DROGUE_TYPES))
-    reference = ops[reference_name]
-    cells = reference["cell_flat"].astype(int)
-    n_cells = len(cells)
-    n_lon = len(reference["lon_edges"]) - 1
-    n_lat = len(reference["lat_edges"]) - 1
-
-    # Both drogue types must use the same ocean-state definition.
+    reference = ops[next(iter(DROGUE_TYPES))]
     for name, op in ops.items():
-        if not np.array_equal(op["cell_flat"], cells):
-            raise SystemExit(
-                f"Ocean states differ for {name}. " "Rebuild the annual matrices with script 03."
-            )
-
+        if not np.array_equal(op["cell_flat"], reference["cell_flat"]):
+            raise SystemExit(f"Ocean states differ for {name}. Rebuild the annual matrices with transition_matrix.")
         if not np.array_equal(op["exit_labels"].astype(str), reference["exit_labels"].astype(str)):
-            raise SystemExit(
-                f"Absorbing states differ for {name}. " "Rebuild the annual matrices with script 03."
-            )
+            raise SystemExit(f"Absorbing states differ for {name}. Rebuild the annual matrices with transition_matrix.")
+    return ops
 
-    # Production coastal-pooling filter: retain the established model-neighbour coastal
-    # candidates only if independent Natural Earth 50m land is in the same or
-    # an immediately adjacent grid cell. This removes obvious offshore artefacts
-    # caused by confusing unobserved sea cells with land. It is NOT a full
-    # independent redefinition of all physical coastal cells.
-    coast_model_candidates = coastal_states(reference)
+
+# ── Coastal cells: model neighbours near Natural Earth land ─────────────────
+
+def natural_earth_land(box, res):
+    """Natural Earth 50m land around the box, prepared for fast intersection tests."""
     try:
         import cartopy.io.shapereader as ne_reader
         from shapely.geometry import box as geo_box
         from shapely.ops import unary_union
         from shapely.prepared import prep
     except ImportError as exc:
-        raise SystemExit(
-            "Geographic review needs cartopy and shapely. Install with:\n"
-            "  python -m pip install cartopy shapely"
-        ) from exc
-
+        raise SystemExit("Geographic review needs cartopy and shapely. Install with:\n"
+                         "  python -m pip install cartopy shapely") from exc
+    lon_min, lon_max, lat_min, lat_max = box
     try:
-        ne_bounds = geo_box(LON_MIN - 2 * RES, LAT_MIN - 2 * RES, LON_MAX + 2 * RES, LAT_MAX + 2 * RES)
+        ne_bounds = geo_box(lon_min - 2 * res, lat_min - 2 * res, lon_max + 2 * res, lat_max + 2 * res)
         ne_path = ne_reader.natural_earth(resolution="50m", category="physical", name="land")
-        land_pieces = [
-            geom
-            for geom in ne_reader.Reader(ne_path, bbox=ne_bounds.bounds).geometries()
-            if not geom.is_empty and geom.intersects(ne_bounds)
-        ]
+        land_pieces = [geom for geom in ne_reader.Reader(ne_path, bbox=ne_bounds.bounds).geometries()
+                       if not geom.is_empty and geom.intersects(ne_bounds)]
         if not land_pieces:
             raise ValueError("No Natural Earth land polygons overlap the study area")
-        land_prepared = prep(unary_union(land_pieces))
+        return prep(unary_union(land_pieces)), geo_box
     except Exception as exc:
-        raise SystemExit(
-            f"Failed to load Natural Earth 50m land data: {exc}\n"
-            "The first run may need an internet connection. Original script untouched."
-        ) from exc
+        raise SystemExit(f"Failed to load Natural Earth 50m land data: {exc}\n"
+                         "The first run may need an internet connection.") from exc
 
-    ne_lon_edges = reference["lon_edges"].astype(float)
-    ne_lat_edges = reference["lat_edges"].astype(float)
-    ne_land_in_cell = np.zeros((n_lat, n_lon), dtype=bool)
+
+def coastal_cells(reference, args):
+    """The model-neighbour coastal candidates, kept only if Natural Earth land is in
+    the same or an immediately adjacent grid cell. This removes obvious offshore
+    artefacts caused by confusing unobserved sea cells with land; it is not a full
+    independent redefinition of all physical coastal cells."""
+    cells = reference["cell_flat"].astype(int)
+    lon_edges, lat_edges = reference["lon_edges"].astype(float), reference["lat_edges"].astype(float)
+    n_lon, n_lat = len(lon_edges) - 1, len(lat_edges) - 1
+    candidates = coastal_states(reference)
+    land, geo_box = natural_earth_land(args.box, args.res)
+    land_in_cell = np.zeros((n_lat, n_lon), dtype=bool)
     for jj in range(n_lat):
         for ii in range(n_lon):
-            cell_box = geo_box(
-                ne_lon_edges[ii], ne_lat_edges[jj], ne_lon_edges[ii + 1], ne_lat_edges[jj + 1]
-            )
-            ne_land_in_cell[jj, ii] = land_prepared.intersects(cell_box)
-
-    # Use the same 8-neighbour geographic check as verify_data3001_coast.py.
-    ne_pad = np.pad(ne_land_in_cell, 1, constant_values=False)
-    ne_near_land = np.zeros_like(ne_land_in_cell)
+            land_in_cell[jj, ii] = land.intersects(geo_box(lon_edges[ii], lat_edges[jj], lon_edges[ii + 1], lat_edges[jj + 1]))
+    pad = np.pad(land_in_cell, 1, constant_values=False)
+    near_land = np.zeros_like(land_in_cell)
     for dj in (-1, 0, 1):
         for di in (-1, 0, 1):
-            ne_near_land |= ne_pad[1 + dj : 1 + dj + n_lat, 1 + di : 1 + di + n_lon]
+            near_land |= pad[1 + dj: 1 + dj + n_lat, 1 + di: 1 + di + n_lon]
 
-    ne_near_model_states = ne_near_land.ravel()[cells]
-    coast = coast_model_candidates & ne_near_model_states
-    rejected_coastal = np.flatnonzero(coast_model_candidates & ~ne_near_model_states)
-    print(
-        f"Natural Earth 50m coastal filter: {coast_model_candidates.sum()} original candidates; "
-        f"{coast.sum()} retained; {len(rejected_coastal)} removed as not near mapped land"
-    )
-    if len(rejected_coastal):
-        for state in rejected_coastal:
-            raw = int(cells[state])
-            jj, ii = divmod(raw, n_lon)
-            centre_lon = (ne_lon_edges[ii] + ne_lon_edges[ii + 1]) / 2
-            centre_lat = (ne_lat_edges[jj] + ne_lat_edges[jj + 1]) / 2
-            print(f"  excluded state {state}: lon={centre_lon:.3f}, lat={centre_lat:.3f}")
-    print(
-        "WARNING: This is a conservative FILTER of the existing candidate set; "
-        "near-land cells outside that set are not added."
-    )
+    near_states = near_land.ravel()[cells]
+    coast = candidates & near_states
+    rejected = np.flatnonzero(candidates & ~near_states)
+    print(f"Natural Earth 50m coastal filter: {candidates.sum()} original candidates; "
+          f"{coast.sum()} retained; {len(rejected)} removed as not near mapped land")
+    for state in rejected:
+        jj, ii = divmod(int(cells[state]), n_lon)
+        print(f"  excluded state {state}: lon={(lon_edges[ii] + lon_edges[ii + 1]) / 2:.3f}, "
+              f"lat={(lat_edges[jj] + lat_edges[jj + 1]) / 2:.3f}")
+    print("WARNING: This is a conservative FILTER of the existing candidate set; "
+          "near-land cells outside that set are not added.")
+    return coast
 
-    coastal_states_idx = np.where(coast)[0]
-    print(f"Ocean cells         : {n_cells}")
-    print(f"Coastal cells       : {len(coastal_states_idx)}")
 
-    # ── 3. Reconstruct distinct drifters behind every source row ─────────────
-    #
-    # We need the actual drifter IDs. Summing row_drifters from neighbouring rows
-    # would over-count a drifter that visited more than one coastal cell.
-    ds = xr.open_dataset(args.data)
-    lon = ds["lon"].values.astype(float)
-    lat = ds["lat"].values.astype(float)
-    drogue = ds["drogue_status"].values.astype(bool)
-    t = ds["time"].values.astype("datetime64[s]").astype(np.int64)
-    traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
-    in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
-    strand_t = strand_times(ds, traj_idx, t, in_R)
-    start, end, stranded = move_indices(traj_idx, t, in_R, TAU, strand_t)
+# ── Distinct drifters behind every source row ────────────────────────────────
 
-    # Observation -> raw grid cell.
-    cell_flat_obs = np.where(
-        in_R, (((lat - LAT_MIN) // RES).astype(int) * n_lon + ((lon - LON_MIN) // RES).astype(int)), -1
-    )
-
-    # Raw grid cell -> operator state.
-    state_of_cell = np.full(n_lon * n_lat, -1, dtype=int)
-    state_of_cell[cells] = np.arange(n_cells)
-    drifters_by_state = {name: [set() for _ in range(n_cells)] for name in DROGUE_TYPES}
-
+def drifters_by_state(moves, ops):
+    """Per drogue type and ocean state, the set of drifters with moves from it.
+    Summing row_drifters from neighbouring rows would over-count a drifter that
+    visited more than one coastal cell. Stops unless the sets rebuild row_drifters."""
+    cells = ops["drogued"]["cell_flat"].astype(int)
+    state_of_cell = np.full(moves.grid.n_cells, -1, dtype=int)
+    state_of_cell[cells] = np.arange(len(cells))
+    by_state = {name: [set() for _ in range(len(cells))] for name in DROGUE_TYPES}
     for name, flag in DROGUE_TYPES.items():
-        same_type = same_drogue(drogue, start, end, stranded, flag)
-        s = start[same_type]
-        from_state = state_of_cell[cell_flat_obs[s]]
-        pairs = np.unique(np.column_stack([from_state, traj_idx[s]]), axis=0)
-
+        s = moves.of_type(flag)[0]
+        pairs = np.unique(np.column_stack([state_of_cell[moves.cell_flat[s]], moves.drifters.traj_idx[s]]), axis=0)
         for st, drifter in pairs:
-            drifters_by_state[name][int(st)].add(int(drifter))
-
-    # Check that the reconstruction exactly matches the annual operator.
+            by_state[name][int(st)].add(int(drifter))
     for name in DROGUE_TYPES:
-        reconstructed = np.array([len(x) for x in drifters_by_state[name]], dtype=int)
+        reconstructed = np.array([len(x) for x in by_state[name]], dtype=int)
         saved = ops[name]["row_drifters"].astype(int)
-
         if not np.array_equal(reconstructed, saved):
-            mismatch = np.sum(reconstructed != saved)
-
-            raise SystemExit(
-                f"\nDrifter-count mismatch for {name}: "
-                f"{mismatch} rows differ from the saved operator.\n"
-                "Rebuild script 03 using the current data file before running 21."
-            )
-
+            raise SystemExit(f"\nDrifter-count mismatch for {name}: {np.sum(reconstructed != saved)} rows differ "
+                             "from the saved operator.\nRebuild it with transition_matrix from the current data file.")
     print("Drifter reconstruction: matches saved annual matrices")
+    return by_state
 
-    # ── 4. Coastal adjacency graph ────────────────────────────────────────────
-    #
-    # Eight-neighbour connectivity keeps diagonally connected pieces of coastline
-    # together while still restricting pooling to immediately neighbouring
-    # coastal cells.
-    coastal_by_flat = {int(cells[st]): int(st) for st in coastal_states_idx}
-    neighbours = {int(st): set() for st in coastal_states_idx}
 
-    for st in coastal_states_idx:
-        flat = int(cells[st])
-        j, i = divmod(flat, n_lon)
-
+def coastal_neighbours(cells, coastal_idx, n_lon, n_lat):
+    """Eight-neighbour adjacency of the coastal states, which keeps diagonally connected
+    pieces of coastline together while pooling only immediate neighbours."""
+    coastal_by_flat = {int(cells[st]): int(st) for st in coastal_idx}
+    neighbours = {int(st): set() for st in coastal_idx}
+    for st in coastal_idx:
+        j, i = divmod(int(cells[st]), n_lon)
         for dj in (-1, 0, 1):
             for di in (-1, 0, 1):
-                if dj == 0 and di == 0:
+                jj, ii = j + dj, i + di
+                if (dj == 0 and di == 0) or jj < 0 or jj >= n_lat or ii < 0 or ii >= n_lon:
                     continue
-
-                jj = j + dj
-                ii = i + di
-
-                if jj < 0 or jj >= n_lat or ii < 0 or ii >= n_lon:
-                    continue
-
                 other_flat = jj * n_lon + ii
-
                 if other_flat in coastal_by_flat:
                     neighbours[int(st)].add(coastal_by_flat[other_flat])
+    return neighbours
 
-    # ── 5. Shared coastal segmentation ───────────────────────────────────────
-    #
-    # Start with one segment per coastal cell. Thin segments are greedily merged
-    # with an adjacent segment. The chosen neighbour is the one that gives the
-    # strongest minimum support across the two drogue classes.
-    segments = {int(st): {int(st)} for st in coastal_states_idx}
-    segment_of = {int(st): int(st) for st in coastal_states_idx}
 
-    def pooled_drifters(members, name):
+# ── Shared coastal segmentation ──────────────────────────────────────────────
+
+class SegmentPool:
+    """Starts with one segment per coastal cell; thin segments are greedily merged
+    with an adjacent segment, choosing the one that gives the strongest minimum
+    support across the two drogue classes."""
+
+    def __init__(self, coastal_idx, neighbours, by_state):
+        self.neighbours, self.by_state = neighbours, by_state
+        self.segments = {int(st): {int(st)} for st in coastal_idx}
+        self.segment_of = {int(st): int(st) for st in coastal_idx}
+        self.merges = 0
+
+    def pooled_drifters(self, members, name):
         """Unique drifters contributing moves from any cell in members."""
         result = set()
-
         for st in members:
-            result.update(drifters_by_state[name][st])
-
+            result.update(self.by_state[name][st])
         return result
 
-    def support_counts(members):
-        """Distinct-drifer support for all drogue classes."""
-        return {name: len(pooled_drifters(members, name)) for name in DROGUE_TYPES}
+    def support_counts(self, members):
+        """Distinct-drifter support for all drogue classes."""
+        return {name: len(self.pooled_drifters(members, name)) for name in DROGUE_TYPES}
 
-    def segment_neighbours(segment_id):
+    def segment_neighbours(self, segment_id):
         """Adjacent current segment IDs."""
         result = set()
-
-        for st in segments[segment_id]:
-            for nb in neighbours[st]:
-                result.add(segment_of[nb])
-
+        for st in self.segments[segment_id]:
+            for nb in self.neighbours[st]:
+                result.add(self.segment_of[nb])
         result.discard(segment_id)
         return result
 
-    merge_count = 0
+    def best_merge(self, segment_id):
+        """The neighbour to merge with: the merge that most improves the weakest drogue
+        class, ties going to more total support, then fewer cells. None if none fits."""
+        candidates = []
+        for other_id in self.segment_neighbours(segment_id):
+            if other_id not in self.segments:
+                continue
+            combined = self.segments[segment_id] | self.segments[other_id]
+            if len(combined) > MAX_POOL_CELLS:
+                continue
+            support = self.support_counts(combined)
+            score = (min(support.values()), sum(support.values()), -len(combined), -min(combined))
+            candidates.append((score, other_id, combined))
+        if not candidates:
+            return None
+        candidates.sort(reverse=True, key=lambda x: x[0])
+        return candidates[0][1:]
 
-    while True:
+    def merge_once(self):
+        """Merge the thinnest segment that can be merged; False if none can."""
         thin = []
-
-        for segment_id, members in segments.items():
-            support = support_counts(members)
-            minimum_support = min(support.values())
-
+        for segment_id, members in self.segments.items():
+            minimum_support = min(self.support_counts(members).values())
             if minimum_support < MIN_DRIFTERS:
                 thin.append((minimum_support, len(members), segment_id))
-
         thin.sort()
-        merged_this_round = False
-
         for _, _, segment_id in thin:
-            if segment_id not in segments:
+            if segment_id not in self.segments:
                 continue
-
-            current_members = segments[segment_id]
-            candidates = []
-
-            for other_id in segment_neighbours(segment_id):
-                if other_id not in segments:
-                    continue
-
-                combined = current_members | segments[other_id]
-
-                if len(combined) > MAX_POOL_CELLS:
-                    continue
-
-                support = support_counts(combined)
-                minimum_support = min(support.values())
-                total_support = sum(support.values())
-
-                # Prefer the merge that most improves the weakest drogue class.
-                # Ties prefer more total support, then fewer cells.
-                score = (minimum_support, total_support, -len(combined), -min(combined))
-                candidates.append((score, other_id, combined))
-
-            if not candidates:
+            best = self.best_merge(segment_id)
+            if best is None:
                 continue
-
-            candidates.sort(reverse=True, key=lambda x: x[0])
-            _, other_id, combined = candidates[0]
-            keep_id = min(segment_id, other_id)
-            drop_id = max(segment_id, other_id)
-            segments[keep_id] = combined
-
-            if drop_id in segments:
-                del segments[drop_id]
-
-            if segment_id != keep_id and segment_id in segments:
-                del segments[segment_id]
-
+            other_id, combined = best
+            keep_id, drop_id = min(segment_id, other_id), max(segment_id, other_id)
+            self.segments[keep_id] = combined
+            if drop_id in self.segments:
+                del self.segments[drop_id]
+            if segment_id != keep_id and segment_id in self.segments:
+                del self.segments[segment_id]
             for st in combined:
-                segment_of[st] = keep_id
+                self.segment_of[st] = keep_id
+            self.merges += 1
+            return True
+        return False
 
-            merge_count += 1
-            merged_this_round = True
-            break
+    def run(self, cells):
+        """Merge until no thin segment can be merged. Returns the segments numbered by
+        their smallest grid cell, and each ocean state's segment (-1 off the coast)."""
+        while self.merge_once():
+            pass
+        ordered = sorted(self.segments.values(), key=lambda members: min(cells[list(members)]))
+        segment_of_state = np.full(len(cells), -1, dtype=int)
+        for new_id, members in enumerate(ordered):
+            for st in members:
+                segment_of_state[st] = new_id
+        return ordered, segment_of_state
 
-        if not merged_this_round:
-            break
 
-    # Stable segment numbering: order by the smallest raw grid cell.
-    ordered_segments = sorted(segments.values(), key=lambda members: min(cells[list(members)]))
-    segment_of_state = np.full(n_cells, -1, dtype=int)
+# ── Tables ───────────────────────────────────────────────────────────────────
 
-    for new_id, members in enumerate(ordered_segments):
-        for st in members:
-            segment_of_state[st] = new_id
-
-    n_segments = len(ordered_segments)
-    print(f"Pooling merges       : {merge_count}")
-    print(f"Coastal segments     : {n_segments}")
-
-    # ── 6. Segment-level support and one-step fates ───────────────────────────
-    segment_rows = []
-    segment_support = {name: np.zeros(n_segments, dtype=int) for name in DROGUE_TYPES}
-
-    for segment_id, members in enumerate(ordered_segments):
+def segment_table(ordered, ops, pool):
+    """Support and one-step fates of every segment, and each type's support per segment."""
+    reference = ops["drogued"]
+    cells = reference["cell_flat"].astype(int)
+    n_cells, n_lon = len(cells), len(reference["lon_edges"]) - 1
+    rows = []
+    support = {name: np.zeros(len(ordered), dtype=int) for name in DROGUE_TYPES}
+    for segment_id, members in enumerate(ordered):
         members = sorted(members)
-        member_flats = cells[members]
-        member_j, member_i = np.divmod(member_flats, n_lon)
+        member_j, member_i = np.divmod(cells[members], n_lon)
         lon_centres = (reference["lon_edges"][member_i] + reference["lon_edges"][member_i + 1]) / 2
         lat_centres = (reference["lat_edges"][member_j] + reference["lat_edges"][member_j + 1]) / 2
-
         for name in DROGUE_TYPES:
             op = ops[name]
-            unique_drifters = pooled_drifters(members, name)
-            n_drifters = len(unique_drifters)
-            segment_support[name][segment_id] = n_drifters
+            n_drifters = len(pool.pooled_drifters(members, name))
+            support[name][segment_id] = n_drifters
             pooled_counts = op["C"][members].sum(axis=0)
             total_moves = pooled_counts.sum()
-
             if total_moves > 0:
                 prob_in_R = pooled_counts[:n_cells].sum() / total_moves
                 absorbing = pooled_counts[n_cells:] / total_moves
-
             else:
-
                 prob_in_R = np.nan
                 absorbing = np.full(len(EXIT_LABELS), np.nan)
-
-            row = {
-                "segment_id": segment_id + 1,
-                "drogue": name,
-                "n_cells": len(members),
-                "mean_lon": float(np.mean(lon_centres)),
-                "mean_lat": float(np.mean(lat_centres)),
-                "distinct_drifters": n_drifters,
-                "reliable": bool(n_drifters >= MIN_DRIFTERS),
-                "moves": int(total_moves),
-                "p_in_R": float(prob_in_R),
-            }
-
+            row = {"segment_id": segment_id + 1, "drogue": name, "n_cells": len(members),
+                   "mean_lon": float(np.mean(lon_centres)), "mean_lat": float(np.mean(lat_centres)),
+                   "distinct_drifters": n_drifters, "reliable": bool(n_drifters >= MIN_DRIFTERS),
+                   "moves": int(total_moves), "p_in_R": float(prob_in_R)}
             for k, label in enumerate(op["exit_labels"].astype(str)):
                 row[f"p_{label}"] = float(absorbing[k])
+            rows.append(row)
+    return pd.DataFrame(rows), support
 
-            segment_rows.append(row)
 
-    segment_table = pd.DataFrame(segment_rows)
-    segment_table.to_csv(SEGMENT_FILE, index=False)
-
-    # ── 7. Cell -> segment mapping ────────────────────────────────────────────
+def cell_table(coastal_idx, ordered, segment_of_state, support, reference, by_state):
+    """Each coastal cell's segment, and its support before and after pooling."""
+    cells = reference["cell_flat"].astype(int)
     cell_lon, cell_lat = cell_centres(reference)
-    cell_rows = []
-
-    for st in coastal_states_idx:
+    rows = []
+    for st in coastal_idx:
         segment_id = segment_of_state[st]
-        members = ordered_segments[segment_id]
-
-        row = {
-            "state": int(st),
-            "cell_flat": int(cells[st]),
-            "lon": float(cell_lon[st]),
-            "lat": float(cell_lat[st]),
-            "segment_id": int(segment_id + 1),
-            "segment_cells": int(len(members)),
-        }
-
+        row = {"state": int(st), "cell_flat": int(cells[st]), "lon": float(cell_lon[st]), "lat": float(cell_lat[st]),
+               "segment_id": int(segment_id + 1), "segment_cells": int(len(ordered[segment_id]))}
         for name in DROGUE_TYPES:
-            original_count = len(drifters_by_state[name][st])
-            pooled_count = segment_support[name][segment_id]
+            original_count = len(by_state[name][st])
+            pooled_count = support[name][segment_id]
             row[f"{name}_cell_drifters"] = int(original_count)
             row[f"{name}_cell_reliable"] = bool(original_count >= MIN_DRIFTERS)
             row[f"{name}_pooled_drifters"] = int(pooled_count)
             row[f"{name}_pooled_reliable"] = bool(pooled_count >= MIN_DRIFTERS)
+        row["pooled_reliable_both"] = bool(all(support[name][segment_id] >= MIN_DRIFTERS for name in DROGUE_TYPES))
+        rows.append(row)
+    return pd.DataFrame(rows)
 
-        row["pooled_reliable_both"] = bool(
-            all(segment_support[name][segment_id] >= MIN_DRIFTERS for name in DROGUE_TYPES)
-        )
 
-        cell_rows.append(row)
-
-    cell_table = pd.DataFrame(cell_rows)
-    cell_table.to_csv(CELL_FILE, index=False)
-
-    # ── 8. Summary before and after pooling ───────────────────────────────────
-    summary_rows = []
-
+def summary_table(coastal_idx, segment_of_state, support, by_state, args):
+    """Support before and after pooling, per drogue type."""
+    n_segments = len(next(iter(support.values())))
+    rows = []
     for name in DROGUE_TYPES:
-        original = np.array([len(drifters_by_state[name][st]) for st in coastal_states_idx], dtype=int)
+        original = np.array([len(by_state[name][st]) for st in coastal_idx], dtype=int)
         original_active = original > 0
+        original_reliable_share = (float(np.mean(original[original_active] >= MIN_DRIFTERS))
+                                   if original_active.any() else np.nan)
+        pooled_by_cell = np.array([support[name][segment_of_state[st]] for st in coastal_idx], dtype=int)
+        rows.append({
+            "drogue": name, "res": args.res, "tau_days": args.tau,
+            "coastal_cells": len(coastal_idx), "segments": n_segments, "max_pool_cells": MAX_POOL_CELLS,
+            "original_active_cells": int(original_active.sum()),
+            "original_reliable_active_share": original_reliable_share,
+            "pooled_reliable_cell_share": float(np.mean(pooled_by_cell >= MIN_DRIFTERS)),
+            "pooled_reliable_segment_share": float(np.mean(support[name] >= MIN_DRIFTERS)),
+            "median_segment_support": float(np.median(support[name])),
+            "min_segment_support": int(np.min(support[name])),
+            "max_segment_support": int(np.max(support[name])),
+        })
+    return pd.DataFrame(rows)
 
-        if original_active.any():
-            original_reliable_share = float(np.mean(original[original_active] >= MIN_DRIFTERS))
 
-        else:
-
-            original_reliable_share = np.nan
-
-        pooled_by_cell = np.array(
-            [segment_support[name][segment_of_state[st]] for st in coastal_states_idx], dtype=int
-        )
-
-        pooled_cell_reliable_share = float(np.mean(pooled_by_cell >= MIN_DRIFTERS))
-        pooled_segment_reliable_share = float(np.mean(segment_support[name] >= MIN_DRIFTERS))
-
-        summary_rows.append(
-            {
-                "drogue": name,
-                "res": RES,
-                "tau_days": TAU,
-                "coastal_cells": len(coastal_states_idx),
-                "segments": n_segments,
-                "max_pool_cells": MAX_POOL_CELLS,
-                "original_active_cells": int(original_active.sum()),
-                "original_reliable_active_share": original_reliable_share,
-                "pooled_reliable_cell_share": pooled_cell_reliable_share,
-                "pooled_reliable_segment_share": pooled_segment_reliable_share,
-                "median_segment_support": float(np.median(segment_support[name])),
-                "min_segment_support": int(np.min(segment_support[name])),
-                "max_segment_support": int(np.max(segment_support[name])),
-            }
-        )
-
-    summary_table = pd.DataFrame(summary_rows)
-    summary_table.to_csv(SUMMARY_FILE, index=False)
-    reliable_both_segments = np.ones(n_segments, dtype=bool)
-
-    for name in DROGUE_TYPES:
-        reliable_both_segments &= segment_support[name] >= MIN_DRIFTERS
-
-    segment_sizes = np.array([len(x) for x in ordered_segments])
+def print_summary(summary, reliable_both, segment_sizes):
     print("\n----------------------------------------")
     print("SUPPORT BEFORE / AFTER POOLING")
     print("----------------------------------------")
-
-    for row in summary_table.itertuples():
+    for row in summary.itertuples():
         print(f"\n{row.drogue.upper()}")
-
-        print(
-            f"Original reliable coastal rows "
-            f"(active only) : "
-            f"{row.original_reliable_active_share:.1%}"
-        )
-
-        print(
-            f"Coastal cells covered by a "
-            f"reliable pooled segment: "
-            f"{row.pooled_reliable_cell_share:.1%}"
-        )
-
+        print(f"Original reliable coastal rows (active only) : {row.original_reliable_active_share:.1%}")
+        print(f"Coastal cells covered by a reliable pooled segment: {row.pooled_reliable_cell_share:.1%}")
         print(f"Reliable pooled segments       : {row.pooled_reliable_segment_share:.1%}")
         print(f"Median pooled support          : {row.median_segment_support:.0f} drifters")
-
     print("\nSHARED SEGMENTS")
-
-    print(
-        f"Reliable in both types : "
-        f"{reliable_both_segments.sum()} / "
-        f"{n_segments} "
-        f"({reliable_both_segments.mean():.1%})"
-    )
-
+    print(f"Reliable in both types : {reliable_both.sum()} / {len(reliable_both)} ({reliable_both.mean():.1%})")
     print(f"Median segment size    : {np.median(segment_sizes):.1f} cells")
     print(f"Maximum segment size   : {segment_sizes.max()} cells")
-    print(f"Segments still thin    : {(~reliable_both_segments).sum()}")
+    print(f"Segments still thin    : {(~reliable_both).sum()}")
 
-    # ── 9. Save mapping for Week 6 ────────────────────────────────────────────
+
+def save_mapping(path, segment_of_state, coast, support, segment_sizes, reliable_both, cells, args):
+    """The segmentation, for traffic_exposure."""
     np.savez_compressed(
-        MAPPING_FILE,
-        segment_of_state=segment_of_state,
-        coastal=coast,
-        cell_flat=cells,
-        drogued_support=segment_support["drogued"],
-        undrogued_support=segment_support["undrogued"],
-        segment_size=segment_sizes,
-        reliable_both=reliable_both_segments,
-        res=RES,
-        tau_days=TAU,
-        box=np.array(args.box),
-        min_drifters=MIN_DRIFTERS,
-        max_pool_cells=MAX_POOL_CELLS,
-        coast_definition="original_model_neighbours_and_NaturalEarth50m_land_8neighbours",
-    )
+        path, segment_of_state=segment_of_state, coastal=coast, cell_flat=cells,
+        drogued_support=support["drogued"], undrogued_support=support["undrogued"],
+        segment_size=segment_sizes, reliable_both=reliable_both,
+        res=args.res, tau_days=args.tau, box=np.array(args.box),
+        min_drifters=MIN_DRIFTERS, max_pool_cells=MAX_POOL_CELLS, coast_definition=COAST_DEFINITION)
 
-    # ── 10. Figure ────────────────────────────────────────────────────────────
-    segment_grid = np.full(n_lon * n_lat, np.nan)
-    drogued_grid = np.full(n_lon * n_lat, np.nan)
-    undrogued_grid = np.full(n_lon * n_lat, np.nan)
 
-    for st in coastal_states_idx:
-        flat = cells[st]
+# ── Figure ───────────────────────────────────────────────────────────────────
+
+def plot_pooling(coastal_idx, segment_of_state, support, reference, args, path):
+    cells = reference["cell_flat"].astype(int)
+    n_lon, n_lat = len(reference["lon_edges"]) - 1, len(reference["lat_edges"]) - 1
+    grids = {key: np.full(n_lon * n_lat, np.nan) for key in ("segment", "drogued", "undrogued")}
+    for st in coastal_idx:
         segment_id = segment_of_state[st]
-        segment_grid[flat] = segment_id + 1
-        drogued_grid[flat] = segment_support["drogued"][segment_id]
-        undrogued_grid[flat] = segment_support["undrogued"][segment_id]
-
-    segment_grid = segment_grid.reshape(n_lat, n_lon)
-    drogued_grid = drogued_grid.reshape(n_lat, n_lon)
-    undrogued_grid = undrogued_grid.reshape(n_lat, n_lon)
+        grids["segment"][cells[st]] = segment_id + 1
+        grids["drogued"][cells[st]] = support["drogued"][segment_id]
+        grids["undrogued"][cells[st]] = support["undrogued"][segment_id]
     fig, axes = plt.subplots(1, 3, figsize=(16, 5), sharex=True, sharey=True)
-
-    extent = [
-        reference["lon_edges"][0],
-        reference["lon_edges"][-1],
-        reference["lat_edges"][0],
-        reference["lat_edges"][-1],
-    ]
-
-    im0 = axes[0].imshow(segment_grid, origin="lower", extent=extent, aspect="auto")
-    axes[0].set_title("Pooled coastal segment ID")
-    fig.colorbar(im0, ax=axes[0], shrink=0.8)
-    im1 = axes[1].imshow(drogued_grid, origin="lower", extent=extent, aspect="auto", vmin=0)
-    axes[1].set_title("Drogued: distinct drifters\nper pooled segment")
-    fig.colorbar(im1, ax=axes[1], shrink=0.8)
-    im2 = axes[2].imshow(undrogued_grid, origin="lower", extent=extent, aspect="auto", vmin=0)
-    axes[2].set_title("Undrogued: distinct drifters\nper pooled segment")
-    fig.colorbar(im2, ax=axes[2], shrink=0.8)
-
+    extent = [reference["lon_edges"][0], reference["lon_edges"][-1], reference["lat_edges"][0], reference["lat_edges"][-1]]
+    for ax, key, title, kw in [(axes[0], "segment", "Pooled coastal segment ID", {}),
+                               (axes[1], "drogued", "Drogued: distinct drifters\nper pooled segment", {"vmin": 0}),
+                               (axes[2], "undrogued", "Undrogued: distinct drifters\nper pooled segment", {"vmin": 0})]:
+        image = ax.imshow(grids[key].reshape(n_lat, n_lon), origin="lower", extent=extent, aspect="auto", **kw)
+        ax.set_title(title)
+        fig.colorbar(image, ax=ax, shrink=0.8)
     for ax in axes:
         ax.set_xlabel("Longitude")
-
     axes[0].set_ylabel("Latitude")
-    fig.suptitle(f"Coastal pooling — {RES:g}°, τ = {TAU:g} d")
-    plt.savefig(FIGURE_FILE, dpi=150, bbox_inches="tight")
-    plt.close()
+    fig.suptitle(f"Coastal pooling — {args.res:g}°, τ = {args.tau:g} d")
+    save_figure(path)
 
-    # ── 11. Outputs ───────────────────────────────────────────────────────────
+
+def print_outputs(paths):
     print("\nSaved:")
-    print(f"  {CELL_FILE}")
-    print(f"  {SEGMENT_FILE}")
-    print(f"  {SUMMARY_FILE}")
-    print(f"  {MAPPING_FILE}")
-    print(f"  {FIGURE_FILE}")
+    for path in paths:
+        print(f"  {path}")
     print("\nInterpretation:")
+    print("Pooling is used for coastal-segment summaries and future coastal-risk "
+          "analysis. It does not replace or smooth the main transition matrix.")
+    print("Segments that remain below the drifter threshold are retained and "
+          "explicitly flagged rather than being merged over an arbitrarily long "
+          "stretch of coastline.")
 
-    print(
-        "Pooling is used for coastal-segment summaries and future coastal-risk "
-        "analysis. It does not replace or smooth the main transition matrix."
-    )
 
-    print(
-        "Segments that remain below the drifter threshold are retained and "
-        "explicitly flagged rather than being merged over an arbitrarily long "
-        "stretch of coastline."
-    )
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    tag = setting_tag(args.res, args.tau, args.box)
+    out_cells = f"data/coastal_pooling_cells_{tag}.csv"
+    out_segments = f"data/coastal_pooling_segments_{tag}.csv"
+    out_summary = f"data/coastal_pooling_summary_{tag}.csv"
+    out_mapping = f"data/coastal_segments_{tag}.npz"
+    out_png = f"figures/{region_prefix(args.data)}_coastal_pooling_{tag}.png"
+
+    print_header(args)
+    ops = load_ops(args)
+    reference = ops["drogued"]
+    cells = reference["cell_flat"].astype(int)
+    coast = coastal_cells(reference, args)
+    coastal_idx = np.where(coast)[0]
+    print(f"Ocean cells         : {len(cells)}")
+    print(f"Coastal cells       : {len(coastal_idx)}")
+
+    moves = MoveSet(Drifters(args.data), args.box, args.res, args.tau)
+    by_state = drifters_by_state(moves, ops)
+    pool = SegmentPool(coastal_idx, coastal_neighbours(cells, coastal_idx, moves.grid.n_lon, moves.grid.n_lat), by_state)
+    ordered, segment_of_state = pool.run(cells)
+    print(f"Pooling merges       : {pool.merges}")
+    print(f"Coastal segments     : {len(ordered)}")
+
+    segments, support = segment_table(ordered, ops, pool)
+    segments.to_csv(out_segments, index=False)
+    cell_table(coastal_idx, ordered, segment_of_state, support, reference, by_state).to_csv(out_cells, index=False)
+    summary = summary_table(coastal_idx, segment_of_state, support, by_state, args)
+    summary.to_csv(out_summary, index=False)
+    reliable_both = np.logical_and.reduce([support[name] >= MIN_DRIFTERS for name in DROGUE_TYPES])
+    segment_sizes = np.array([len(x) for x in ordered])
+    print_summary(summary, reliable_both, segment_sizes)
+    save_mapping(out_mapping, segment_of_state, coast, support, segment_sizes, reliable_both, cells, args)
+
+    plot_pooling(coastal_idx, segment_of_state, support, reference, args, out_png)
+    print_outputs([out_cells, out_segments, out_summary, out_mapping, out_png])
 
 
 if __name__ == "__main__":

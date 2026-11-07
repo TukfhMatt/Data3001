@@ -1,0 +1,4 @@
+# Test and lint tools, on top of requirements.txt.
+-r requirements.txt
+pyflakes==3.4.0
+pytest==8.4.2
