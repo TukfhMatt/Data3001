@@ -25,6 +25,8 @@ all builds match transition_matrix exactly; drifter_counts and resampled_counts 
 
 import numpy as np
 
+from agulhas.config import DROGUE_TYPES, operator_path
+
 EXIT_LABELS = np.array(["W", "E", "S", "N", "stranded"])
 STRANDED = len(EXIT_LABELS) - 1          # offset of the stranded state after the ocean cells
 STRAND_MATCH_S = 86400                   # last subset obs within this of GDP's end date
@@ -65,6 +67,15 @@ def coast_of(lon, lat):
 def load_operator(path):
     with np.load(path, allow_pickle=False) as f:
         return {k: f[k] for k in f.files}
+
+
+def each_operator(args):
+    """Every saved matrix of the settings a step was given, by lag, then grid, then
+    drogue type: (res, tau, name, operator)."""
+    for tau in args.tau:
+        for res in args.res:
+            for name in DROGUE_TYPES:
+                yield res, tau, name, load_operator(operator_path(name, res, tau, args.box))
 
 
 def state_of(op, lon, lat):
@@ -300,3 +311,13 @@ def resampled_counts(counts, n_states, rng):
     d_idx, ft, n, n_drifters = counts
     w = np.bincount(rng.integers(n_drifters, size=n_drifters), minlength=n_drifters)
     return np.bincount(ft, weights=n * w[d_idx], minlength=n_states**2).reshape(n_states, n_states)
+
+
+def load_coast_counts(path, names, n_states):
+    """Per-drifter counts of the named coast operators, as coastal_stranding saves them
+    and resampled_counts takes them. Stops if they belong to operators of another size."""
+    counts_file = np.load(path)
+    if int(counts_file["n_states"]) != n_states:
+        raise SystemExit("data/coast_counts_….npz does not match the coast operators; rerun coastal_stranding.")
+    return {name: tuple(counts_file[f"{name}_{part}"] for part in ("d_idx", "ft", "n"))
+            + (int(counts_file[f"{name}_n_drifters"]),) for name in names}

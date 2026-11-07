@@ -32,14 +32,14 @@ Scores, per drogue type and horizon:
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
-import xarray as xr
 
-from agulhas.config import DROGUE_TYPES, box_tag, grid_shape, parse_args, region_prefix
-from agulhas.transport import (EXIT_LABELS, STRANDED, move_indices, row_normalise, same_drogue,
-                       strand_times, transition_states)
+from agulhas.config import DROGUE_TYPES, parse_args, region_prefix, setting_tag
+from agulhas.drifters import Drifters, in_box
+from agulhas.moves import MoveSet
+from agulhas.plotting import DROGUE_COLORS, save_figure
+from agulhas.stats import haversine_km
+from agulhas.transport import EXIT_LABELS, STRANDED, row_normalise, same_drogue, transition_states
 
 K_FOLDS = 5
 SEED = 0
@@ -49,65 +49,48 @@ EXIT_BINS = np.linspace(0, 1, 11)
 COLORS = {"Markov": "#2a78d6", "Mean-current advection": "#eb6834", "Persistence": "#7a7a7a"}
 
 
-def haversine_km(lo1, la1, lo2, la2):
-    lo1, la1, lo2, la2 = map(np.radians, (lo1, la1, lo2, la2))
-    a = np.sin((la2 - la1) / 2) ** 2 + np.cos(la1) * np.cos(la2) * np.sin((lo2 - lo1) / 2) ** 2
-    return 2 * 6371.0 * np.arcsin(np.sqrt(a))
+class HeldOut:
+    """The subset on one grid and lag, with what every fold needs: the ocean states
+    (the same as transition_matrix), a key per observation to find the same drifter
+    a whole number of steps later, and all moves from R."""
 
+    def __init__(self, drifters, box, res, tau):
+        self.d, self.box, self.tau = drifters, box, tau
+        self.strand_t = drifters.strand_times(in_box(drifters.lon, drifters.lat, box))
+        self.moves = MoveSet(drifters, box, res, tau, self.strand_t)
+        self.grid, self.in_R, self.cell_flat = self.moves.grid, self.moves.in_R, self.moves.cell_flat
+        self.cells = np.unique(self.cell_flat[self.in_R])
+        self.n_cells = len(self.cells)
+        self.n_states = self.n_cells + len(EXIT_LABELS)
+        self.state_of_cell = np.full(self.grid.n_cells, -1)
+        self.state_of_cell[self.cells] = np.arange(self.n_cells)
+        cj, ci = np.divmod(self.cells, self.grid.n_lon)
+        self.cell_lon = np.minimum(self.grid.lon_min + (ci + 0.5) * res, self.grid.lon_max)
+        self.cell_lat = np.minimum(self.grid.lat_min + (cj + 0.5) * res, self.grid.lat_max)
+        self.key = drifters.traj_idx.astype(np.int64) * 10**10 + drifters.t
+        self.tau_s = int(round(tau * 86400))
+        self.horizon_steps = list(range(1, int(np.ceil(HORIZON_DAYS / tau - 1e-9)) + 1))
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    RES, TAU = args.res, args.tau
-    HORIZON_STEPS = list(range(1, int(np.ceil(HORIZON_DAYS / TAU - 1e-9)) + 1))
-    TAG = f"{f'{RES:g}'.replace('.', 'p')}deg_{f'{TAU:g}'.replace('.', 'p')}d_{box_tag(args.box)}"
+    def exit_side(self, lo, la):
+        lon_min, lon_max, lat_min, lat_max = self.box
+        return np.argmax(np.stack([lon_min - lo, lo - lon_max, lat_min - la, la - lat_max]), axis=0)
 
-    # ── 1. Load subset, grid, states ─────────────────────────────────────────
-    ds = xr.open_dataset(args.data)
-    lon = ds["lon"].values.astype(float)
-    lat = ds["lat"].values.astype(float)
-    ve = ds["ve"].values.astype(float)
-    vn = ds["vn"].values.astype(float)
-    drogue = ds["drogue_status"].values.astype(bool)
-    t = ds["time"].values.astype("datetime64[s]").astype(np.int64)
-    traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
-
-    n_lon, n_lat = grid_shape(args.box, RES)
-    in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
-    cell_flat = np.where(in_R, ((lat - LAT_MIN) // RES).astype(int) * n_lon
-                         + ((lon - LON_MIN) // RES).astype(int), -1)
-    cells = np.unique(cell_flat[in_R])            # same ocean states as transition_matrix
-    n_cells = len(cells)
-    n_states = n_cells + len(EXIT_LABELS)
-    state_of_cell = np.full(n_lat * n_lon, -1)
-    state_of_cell[cells] = np.arange(n_cells)
-    cj, ci = np.divmod(cells, n_lon)
-    cell_lon = np.minimum(LON_MIN + (ci + 0.5) * RES, LON_MAX)
-    cell_lat = np.minimum(LAT_MIN + (cj + 0.5) * RES, LAT_MAX)
-
-    key = traj_idx.astype(np.int64) * 10**10 + t
-    tau_s = int(round(TAU * 86400))
-    strand_t = strand_times(ds, traj_idx, t, in_R)
-    start_all, end_all, strand_all = move_indices(traj_idx, t, in_R, TAU, strand_t)   # all moves from R
-
-    def exit_side(lo, la):
-        return np.argmax(np.stack([LON_MIN - lo, lo - LON_MAX, LAT_MIN - la, la - LAT_MAX]), axis=0)
-
-    def obs_at(idx, dt):
+    def obs_at(self, idx, dt):
         """Index of the same drifter's observation dt seconds after idx, or -1."""
-        target = key[idx] + dt
-        j = np.minimum(np.searchsorted(key, target), len(key) - 1)
-        return np.where(key[j] == target, j, -1)
+        target = self.key[idx] + dt
+        j = np.minimum(np.searchsorted(self.key, target), len(self.key) - 1)
+        return np.where(self.key[j] == target, j, -1)
 
-    # ── 2. Test samples: daily starts, true outcome at each whole step ───────
-    def test_samples(flag, test_traj):
-        s0 = np.where(in_R & (drogue == flag) & np.isin(traj_idx, test_traj) & (t % 86400 == 0))[0]
-        K = max(HORIZON_STEPS)
+    # ── Test samples: daily starts, true outcome at each whole step ──────────
+
+    def test_samples(self, flag, test_traj):
+        d = self.d
+        s0 = np.where(self.in_R & (d.drogue == flag) & np.isin(d.traj_idx, test_traj) & (d.t % 86400 == 0))[0]
+        K = max(self.horizon_steps)
         state = np.full((len(s0), K + 1), -1)
-        state[:, 0] = state_of_cell[cell_flat[s0]]
+        state[:, 0] = self.state_of_cell[self.cell_flat[s0]]
         pos = np.full((len(s0), K + 1, 2), np.nan)
-        pos[:, 0] = np.c_[lon[s0], lat[s0]]
+        pos[:, 0] = np.c_[d.lon[s0], d.lat[s0]]
         alive = state[:, 0] >= 0
         exited = np.zeros(len(s0), bool)
         for k in range(1, K + 1):
@@ -115,124 +98,152 @@ def main(argv=None):
             # needs no further observations
             carry = alive & exited
             state[carry, k] = state[carry, k - 1]
-            j = obs_at(s0, k * tau_s)
+            j = self.obs_at(s0, k * self.tau_s)
             has = j >= 0
-            has[has] &= drogue[j[has]] == flag        # same drogue type, as in training
+            has[has] &= d.drogue[j[has]] == flag        # same drogue type, as in training
             cand = alive & ~exited
-            strands = cand & ~has & (strand_t[s0] >= 0) & (strand_t[s0] < t[s0] + k * tau_s)
-            state[strands, k] = n_cells + STRANDED
+            strands = cand & ~has & (self.strand_t[s0] >= 0) & (self.strand_t[s0] < d.t[s0] + k * self.tau_s)
+            state[strands, k] = self.n_cells + STRANDED
             exited |= strands
             alive &= ~(cand & ~has & ~strands)         # lost: no matching observation
             ok = cand & has
             jj = np.where(ok, j, 0)
-            outside = ok & (cell_flat[jj] < 0)
-            state[outside, k] = n_cells + exit_side(lon[jj[outside]], lat[jj[outside]])
+            outside = ok & (self.cell_flat[jj] < 0)
+            state[outside, k] = self.n_cells + self.exit_side(d.lon[jj[outside]], d.lat[jj[outside]])
             exited |= outside
             inside = ok & ~outside
-            state[inside, k] = state_of_cell[cell_flat[jj[inside]]]
-            pos[inside, k] = np.c_[lon[jj[inside]], lat[jj[inside]]]
+            state[inside, k] = self.state_of_cell[self.cell_flat[jj[inside]]]
+            pos[inside, k] = np.c_[d.lon[jj[inside]], d.lat[jj[inside]]]
         return s0, state, pos
 
-    # ── 3. Training matrix and baselines for one fold ────────────────────────
-    def train_fold(flag, train_traj):
-        keep = (np.isin(traj_idx[start_all], train_traj)
-                & same_drogue(drogue, start_all, end_all, strand_all, flag))
-        s, e = start_all[keep], end_all[keep]
-        fs, ts = transition_states(cell_flat, cells, s, e, lon, lat, args.box, strand_all[keep])
-        C = np.zeros((n_states, n_states))
-        np.add.at(C, (fs, ts), 1)
-        P, empty = row_normalise(C, cells, n_lon)
-        # Mean current per cell from training observations of this type
-        m = in_R & (drogue == flag) & np.isin(traj_idx, train_traj) & np.isfinite(ve) & np.isfinite(vn)
-        st = state_of_cell[cell_flat[m]]
-        cnt = np.bincount(st, minlength=n_cells)
-        u = np.bincount(st, ve[m], n_cells) / np.maximum(cnt, 1)
-        v = np.bincount(st, vn[m], n_cells) / np.maximum(cnt, 1)
-        return P, u, v, len(s)
+    # ── Training matrix and baselines for one fold ───────────────────────────
 
-    def advect(lo, la, u, v, k_steps):
+    def train_matrix(self, flag, train_traj):
+        """The fold's matrix from its training drifters' moves, and the number of moves."""
+        d, mv = self.d, self.moves
+        keep = (np.isin(d.traj_idx[mv.start], train_traj)
+                & same_drogue(d.drogue, mv.start, mv.end, mv.stranded, flag))
+        s, e = mv.start[keep], mv.end[keep]
+        fs, ts = transition_states(self.cell_flat, self.cells, s, e, d.lon, d.lat, self.box, mv.stranded[keep])
+        C = np.zeros((self.n_states, self.n_states))
+        np.add.at(C, (fs, ts), 1)
+        P, _ = row_normalise(C, self.cells, self.grid.n_lon)
+        return P, len(s)
+
+    def train_fold(self, flag, train_traj):
+        """The fold's matrix, the mean current per cell from its training observations,
+        and the number of training moves."""
+        d = self.d
+        P, n_moves = self.train_matrix(flag, train_traj)
+        ve, vn = d.ve, d.vn
+        m = self.in_R & (d.drogue == flag) & np.isin(d.traj_idx, train_traj) & np.isfinite(ve) & np.isfinite(vn)
+        st = self.state_of_cell[self.cell_flat[m]]
+        cnt = np.bincount(st, minlength=self.n_cells)
+        u = np.bincount(st, ve[m], self.n_cells) / np.maximum(cnt, 1)
+        v = np.bincount(st, vn[m], self.n_cells) / np.maximum(cnt, 1)
+        return P, u, v, n_moves
+
+    def advect(self, lo, la, u, v, k_steps):
         """Deterministic forecast: move by the cell's mean current for each step;
-    returns final positions and the exit state (−1 while still in R)."""
+        returns final positions and the exit state (−1 while still in R)."""
         lo, la = lo.copy(), la.copy()
         ex = np.full(len(lo), -1)
         for _ in range(k_steps):
             live = ex < 0
-            c = np.where(live, cell_flat_of(lo, la), -1)
-            stt = np.where(c >= 0, state_of_cell[np.maximum(c, 0)], -1)
+            c = np.where(live, self.grid.cell_of(lo, la), -1)
+            stt = np.where(c >= 0, self.state_of_cell[np.maximum(c, 0)], -1)
             has = stt >= 0
-            du = np.where(has, u[np.maximum(stt, 0)], 0.0) * tau_s
-            dv = np.where(has, v[np.maximum(stt, 0)], 0.0) * tau_s
+            du = np.where(has, u[np.maximum(stt, 0)], 0.0) * self.tau_s
+            dv = np.where(has, v[np.maximum(stt, 0)], 0.0) * self.tau_s
             lo = np.where(live, lo + du / (111_320.0 * np.cos(np.radians(la))), lo)
             la = np.where(live, la + dv / 110_574.0, la)
-            out = live & ~((lo >= LON_MIN) & (lo < LON_MAX) & (la >= LAT_MIN) & (la < LAT_MAX))
-            ex[out] = n_cells + exit_side(lo[out], la[out])
+            out = live & ~in_box(lo, la, self.box)
+            ex[out] = self.n_cells + self.exit_side(lo[out], la[out])
         return lo, la, ex
 
-    def cell_flat_of(lo, la):
-        inside = (lo >= LON_MIN) & (lo < LON_MAX) & (la >= LAT_MIN) & (la < LAT_MAX)
-        return np.where(inside, ((la - LAT_MIN) // RES).astype(int) * n_lon
-                        + ((lo - LON_MIN) // RES).astype(int), -1)
+    # ── Scores at one horizon ────────────────────────────────────────────────
 
-    # ── 4. Cross-validate ────────────────────────────────────────────────────
-    rng = np.random.default_rng(SEED)
+    def score(self, Pk, k, state, pos, tr_state, current):
+        """Scores of the test samples at step k against their actual outcome: (number
+        scored, scores, predicted and actual exit per sample)."""
+        u, v = current
+        n_cells, n_states = self.n_cells, self.n_states
+        ok = (state[:, 0] >= 0) & (state[:, k] >= 0)
+        st0, stk = state[ok, 0], state[ok, k]
+        pred = Pk[st0]                                      # (n, n_states)
+        p_true = pred[np.arange(len(stk)), stk]
+        # Climatology baseline: training-set frequency of each outcome state at k
+        clim = np.bincount(tr_state[tr_state[:, k] >= 0, k], minlength=n_states).astype(float)
+        clim /= clim.sum()
+        p_exit = pred[:, n_cells:n_cells + STRANDED].sum(axis=1)
+        actual_exit = (stk >= n_cells) & (stk < n_cells + STRANDED)
+        actual_strand = stk == n_cells + STRANDED
+        # Position error for samples still in R at k
+        stay = stk < n_cells
+        mass = pred[stay, :n_cells]
+        w = mass / np.maximum(mass.sum(axis=1, keepdims=True), 1e-12)
+        com_lon, com_lat = w @ self.cell_lon, w @ self.cell_lat
+        act = pos[ok][stay, k]
+        start = pos[ok][stay, 0]
+        adv_lo, adv_la, adv_ex = self.advect(start[:, 0], start[:, 1], u, v, k)
+        adv_ok = adv_ex < 0
+        c0 = st0[stay]                                       # start state (cell)
+        cen_lo, cen_la = self.cell_lon[c0], self.cell_lat[c0]
+        advc_lo, advc_la, advc_ex = self.advect(cen_lo, cen_la, u, v, k)
+        advc_ok = advc_ex < 0
+        scores = {
+            "log_markov": np.mean(np.log(np.maximum(p_true, LOG_FLOOR))),
+            "log_clim": np.mean(np.log(np.maximum(clim[stk], LOG_FLOOR))),
+            "err_markov_km": np.median(haversine_km(com_lon, com_lat, act[:, 0], act[:, 1])),
+            "err_persist_km": np.median(haversine_km(start[:, 0], start[:, 1], act[:, 0], act[:, 1])),
+            "err_advect_km": np.median(haversine_km(adv_lo[adv_ok], adv_la[adv_ok], act[adv_ok, 0], act[adv_ok, 1])),
+            "err_persist_centre_km": np.median(haversine_km(cen_lo, cen_la, act[:, 0], act[:, 1])),
+            "err_advect_centre_km": np.median(haversine_km(advc_lo[advc_ok], advc_la[advc_ok],
+                                                           act[advc_ok, 0], act[advc_ok, 1])),
+            "exit_pred": p_exit.mean(), "exit_obs": actual_exit.mean(),
+            "brier_exit": np.mean((p_exit - actual_exit) ** 2),
+            "strand_pred": pred[:, n_cells + STRANDED].mean(), "strand_obs": actual_strand.mean(),
+        }
+        return int(ok.sum()), scores, p_exit, actual_exit
+
+
+# ── Cross-validate ───────────────────────────────────────────────────────────
+
+def run_fold(ho, name, flag, f, folds_traj):
+    """Scores of one fold at every horizon, and its exit predictions at each."""
+    trajs, test_traj = folds_traj
+    train_traj = np.setdiff1d(trajs, test_traj)
+    P, u, v, n_train = ho.train_fold(flag, train_traj)
+    _, state, pos = ho.test_samples(flag, test_traj)
+    _, tr_state, _ = ho.test_samples(flag, train_traj)
+    records, exit_records = [], []
+    Pk = np.eye(ho.n_states)
+    for k in ho.horizon_steps:
+        Pk = Pk @ P
+        n_test, scores, p_exit, exited = ho.score(Pk, k, state, pos, tr_state, (u, v))
+        exit_records.append(pd.DataFrame({"type": name, "k": k, "p_exit": p_exit, "exited": exited}))
+        records.append({"type": name, "fold": f, "k": k, "days": k * ho.tau, "n_train_pairs": n_train,
+                        "n_test": n_test, "n_test_drifters": len(test_traj), **scores})
+    print(f"{name:<9} fold {f + 1}/{K_FOLDS}: {len(test_traj)} held-out drifters, "
+          f"{int((state[:, 0] >= 0).sum()):,} test starts")
+    return records, exit_records
+
+
+def cross_validate(ho, rng):
+    """K_FOLDS folds of whole drifters per drogue type."""
+    d = ho.d
     records, exit_records = [], []
     for name, flag in DROGUE_TYPES.items():
-        trajs = np.unique(traj_idx[in_R & (drogue == flag)])
-        folds = np.array_split(rng.permutation(trajs), K_FOLDS)
-        for f, test_traj in enumerate(folds):
-            train_traj = np.setdiff1d(trajs, test_traj)
-            P, u, v, n_train = train_fold(flag, train_traj)
-            s0, state, pos = test_samples(flag, test_traj)
-            # Climatology baseline: training-set frequency of each outcome state at k
-            _, tr_state, _ = test_samples(flag, train_traj)
-            Pk = np.eye(n_states)
-            for k in HORIZON_STEPS:
-                Pk = Pk @ P
-                ok = (state[:, 0] >= 0) & (state[:, k] >= 0)
-                st0, stk = state[ok, 0], state[ok, k]
-                pred = Pk[st0]                                      # (n, n_states)
-                p_true = pred[np.arange(len(stk)), stk]
-                clim = np.bincount(tr_state[tr_state[:, k] >= 0, k], minlength=n_states).astype(float)
-                clim /= clim.sum()
-                p_exit = pred[:, n_cells:n_cells + STRANDED].sum(axis=1)
-                actual_exit = (stk >= n_cells) & (stk < n_cells + STRANDED)
-                actual_strand = stk == n_cells + STRANDED
-                exit_records.append(pd.DataFrame({"type": name, "k": k, "p_exit": p_exit,
-                                                  "exited": actual_exit}))
-                # Position error for samples still in R at k
-                stay = stk < n_cells
-                mass = pred[stay, :n_cells]
-                w = mass / np.maximum(mass.sum(axis=1, keepdims=True), 1e-12)
-                com_lon, com_lat = w @ cell_lon, w @ cell_lat
-                act = pos[ok][stay, k]
-                start = pos[ok][stay, 0]
-                adv_lo, adv_la, adv_ex = advect(start[:, 0], start[:, 1], u, v, k)
-                adv_ok = adv_ex < 0
-                c0 = st0[stay]                                       # start state (cell)
-                cen_lo, cen_la = cell_lon[c0], cell_lat[c0]
-                advc_lo, advc_la, advc_ex = advect(cen_lo, cen_la, u, v, k)
-                advc_ok = advc_ex < 0
-                records.append({
-                    "type": name, "fold": f, "k": k, "days": k * TAU, "n_train_pairs": n_train,
-                    "n_test": int(ok.sum()), "n_test_drifters": len(test_traj),
-                    "log_markov": np.mean(np.log(np.maximum(p_true, LOG_FLOOR))),
-                    "log_clim": np.mean(np.log(np.maximum(clim[stk], LOG_FLOOR))),
-                    "err_markov_km": np.median(haversine_km(com_lon, com_lat, act[:, 0], act[:, 1])),
-                    "err_persist_km": np.median(haversine_km(start[:, 0], start[:, 1], act[:, 0], act[:, 1])),
-                    "err_advect_km": np.median(haversine_km(adv_lo[adv_ok], adv_la[adv_ok],
-                                                            act[adv_ok, 0], act[adv_ok, 1])),
-                    "err_persist_centre_km": np.median(haversine_km(cen_lo, cen_la, act[:, 0], act[:, 1])),
-                    "err_advect_centre_km": np.median(haversine_km(advc_lo[advc_ok], advc_la[advc_ok],
-                                                                   act[advc_ok, 0], act[advc_ok, 1])),
-                    "exit_pred": p_exit.mean(), "exit_obs": actual_exit.mean(),
-                    "brier_exit": np.mean((p_exit - actual_exit) ** 2),
-                    "strand_pred": pred[:, n_cells + STRANDED].mean(), "strand_obs": actual_strand.mean(),
-                })
-            print(f"{name:<9} fold {f + 1}/{K_FOLDS}: {len(test_traj)} held-out drifters, "
-                  f"{int((state[:, 0] >= 0).sum()):,} test starts")
+        trajs = np.unique(d.traj_idx[ho.in_R & (d.drogue == flag)])
+        for f, test_traj in enumerate(np.array_split(rng.permutation(trajs), K_FOLDS)):
+            r, e = run_fold(ho, name, flag, f, (trajs, test_traj))
+            records += r
+            exit_records += e
+    return pd.DataFrame(records), pd.concat(exit_records)
 
-    res = pd.DataFrame(records)
-    res.to_csv(f"data/validation_folds_{TAG}.csv", index=False)
+
+def summarise(res):
+    """Mean over folds per drogue type and horizon."""
     summary = res.groupby(["type", "days"]).agg(
         n_test=("n_test", "sum"),
         err_markov_km=("err_markov_km", "mean"), err_advect_km=("err_advect_km", "mean"),
@@ -246,9 +257,11 @@ def main(argv=None):
     summary["skill_vs_persist"] = 1 - summary.err_markov_km / summary.err_persist_km
     summary["skill_vs_advect"] = 1 - summary.err_markov_km / summary.err_advect_km
     summary["skill_vs_advect_centre"] = 1 - summary.err_markov_km / summary.err_advect_centre_km
-    summary.to_csv(f"data/validation_summary_{TAG}.csv", index=False)
+    return summary
 
-    print(f"\nHeld-out validation, {K_FOLDS}-fold by drifter ({RES:g}°, τ = {TAU:g} d); mean over folds")
+
+def print_summary(summary, args):
+    print(f"\nHeld-out validation, {K_FOLDS}-fold by drifter ({args.res:g}°, τ = {args.tau:g} d); mean over folds")
     print(f"{'':<16}{'':>9}{'median error (km)':^45}{'skill vs advect':^18}")
     print(f"{'type':<10}{'days':>6}{'tests':>9}{'Markov':>9}{'adv':>9}{'adv@ctr':>9}{'pers':>9}{'pers@ctr':>9}"
           f"{'exact':>9}{'@ctr':>9}{'log Mkv':>9}{'log clim':>9}{'exit pred':>10}{'exit obs':>9}{'Brier':>8}{'strand pred':>12}{'obs':>7}")
@@ -259,44 +272,71 @@ def main(argv=None):
               f"{r.exit_pred:>10.1%}{r.exit_obs:>9.1%}{r.brier_exit:>8.3f}{r.strand_pred:>12.2%}{r.strand_obs:>7.2%}")
     print("Errors: median km from forecast to actual position (still-in-R samples). @ctr = baseline "
           "started from the cell centre, the same information the matrix has. Log score: higher is better.")
-    print(f"Saved → data/validation_folds_{TAG}.csv, data/validation_summary_{TAG}.csv")
 
-    # ── 5. Figure: position error by horizon, exit calibration ───────────────
-    ex = pd.concat(exit_records)
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
-    for ax, name in zip(axes[:2], DROGUE_TYPES):
-        sub = summary[summary.type == name]
-        for label, col in [("Markov", "err_markov_km"), ("Mean-current advection", "err_advect_km"),
-                           ("Persistence", "err_persist_km")]:
-            spread = res[res.type == name].groupby("days")[col].agg(["min", "max"])
-            ax.plot(sub.days, sub[col], marker="o", lw=2, color=COLORS[label], label=label)
-            ax.fill_between(spread.index, spread["min"], spread["max"], color=COLORS[label], alpha=0.15)
-        ax.plot(sub.days, sub.err_advect_centre_km, ls="--", lw=1.5, color=COLORS["Mean-current advection"],
-                label="Mean-current advection from cell centre")
-        ax.set_xticks(np.arange(0, sub.days.max() + 1, 7))
-        ax.set_xlabel("Horizon (days)")
-        ax.set_ylabel("Median position error (km)")
-        ax.set_title(f"{name.capitalize()}: forecast error on held-out drifters\n(band = range over {K_FOLDS} folds)",
-                     fontsize=10)
-        ax.grid(alpha=0.3)
-        ax.legend(fontsize=8, loc="upper left")
-    ax = axes[2]
+
+# ── Figure: position error by horizon, exit calibration ─────────────────────
+
+def plot_errors(ax, name, summary, res):
+    sub = summary[summary.type == name]
+    for label, col in [("Markov", "err_markov_km"), ("Mean-current advection", "err_advect_km"),
+                       ("Persistence", "err_persist_km")]:
+        spread = res[res.type == name].groupby("days")[col].agg(["min", "max"])
+        ax.plot(sub.days, sub[col], marker="o", lw=2, color=COLORS[label], label=label)
+        ax.fill_between(spread.index, spread["min"], spread["max"], color=COLORS[label], alpha=0.15)
+    ax.plot(sub.days, sub.err_advect_centre_km, ls="--", lw=1.5, color=COLORS["Mean-current advection"],
+            label="Mean-current advection from cell centre")
+    ax.set_xticks(np.arange(0, sub.days.max() + 1, 7))
+    ax.set_xlabel("Horizon (days)")
+    ax.set_ylabel("Median position error (km)")
+    ax.set_title(f"{name.capitalize()}: forecast error on held-out drifters\n(band = range over {K_FOLDS} folds)",
+                 fontsize=10)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8, loc="upper left")
+
+
+def plot_calibration(ax, ex, last_step, tau):
     ax.plot([0, 1], [0, 1], color="#9e9e9e", lw=1, ls="--", label="Perfect calibration")
-    for name, color in [("drogued", "#2a78d6"), ("undrogued", "#eb6834")]:
-        e = ex[(ex.type == name) & (ex.k == max(HORIZON_STEPS))]
+    for name in DROGUE_TYPES:
+        e = ex[(ex.type == name) & (ex.k == last_step)]
         b = pd.cut(e.p_exit, EXIT_BINS, include_lowest=True)
         cal = e.groupby(b, observed=True).agg(p=("p_exit", "mean"), o=("exited", "mean"), n=("exited", "size"))
         cal = cal[cal.n >= 30]
-        ax.plot(cal.p, cal.o, marker="o", lw=2, color=color, label=name.capitalize())
-    ax.set_xlabel(f"Predicted probability of having left R by day {max(HORIZON_STEPS) * TAU:g}")
+        ax.plot(cal.p, cal.o, marker="o", lw=2, color=DROGUE_COLORS[name], label=name.capitalize())
+    ax.set_xlabel(f"Predicted probability of having left R by day {last_step * tau:g}")
     ax.set_ylabel("Observed share that left")
     ax.set_title("Exit calibration (bins with ≥ 30 test starts)", fontsize=10)
-    ax.set_xlim(0, 1); ax.set_ylim(0, 1); ax.grid(alpha=0.3); ax.legend(fontsize=8)
-    fig.suptitle(f"Held-out validation — {RES:g}° grid, τ = {TAU:g} d, box R", fontsize=12, y=1.04)
-    out = f"figures/{region_prefix(args.data)}_validation_{TAG}.png"
-    plt.savefig(out, dpi=150, bbox_inches="tight")
-    print(f"Figure saved → {out}")
-    plt.close()
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.grid(alpha=0.3)
+    ax.legend(fontsize=8)
+
+
+def plot_validation(summary, res, ex, ho, args, path):
+    fig, axes = plt.subplots(1, 3, figsize=(16, 4.8))
+    for ax, name in zip(axes[:2], DROGUE_TYPES):
+        plot_errors(ax, name, summary, res)
+    plot_calibration(axes[2], ex, max(ho.horizon_steps), args.tau)
+    fig.suptitle(f"Held-out validation — {args.res:g}° grid, τ = {args.tau:g} d, box R", fontsize=12, y=1.04)
+    save_figure(path)
+
+
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    tag = setting_tag(args.res, args.tau, args.box)
+    out_folds = f"data/validation_folds_{tag}.csv"
+    out_summary = f"data/validation_summary_{tag}.csv"
+    out_png = f"figures/{region_prefix(args.data)}_validation_{tag}.png"
+
+    ho = HeldOut(Drifters(args.data), args.box, args.res, args.tau)
+    res, ex = cross_validate(ho, np.random.default_rng(SEED))
+    summary = summarise(res)
+    res.to_csv(out_folds, index=False)
+    summary.to_csv(out_summary, index=False)
+    print_summary(summary, args)
+    print(f"Saved → {out_folds}, {out_summary}")
+
+    plot_validation(summary, res, ex, ho, args, out_png)
+    print(f"Figure saved → {out_png}")
 
 
 if __name__ == "__main__":

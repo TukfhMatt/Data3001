@@ -19,21 +19,24 @@ Needs oil_wind, coastal_stranding and traffic_exposure.
     python -m agulhas oil_windage --res 1 --tau 3.5
 """
 
-import os
+from collections import namedtuple
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from agulhas.config import DISAGREE_TVD, OIL_WINDAGE_RANGE, grid_shape, operator_path, parse_args, release_points_path, setting_tag
-from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, check_coast_box, load_operator, propagate, release,
-                       resampled_counts, row_normalise, state_of, stranding_chain)
+from agulhas.config import (DISAGREE_TVD, OIL_WINDAGE_RANGE, grid_shape, operator_path, parse_args,
+                            release_points_path, setting_tag)
+from agulhas.plotting import save_figure
+from agulhas.stats import interval
+from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, check_coast_box, load_coast_counts,
+                               load_operator, propagate, release, resampled_counts, row_normalise, state_of,
+                               stranding_chain)
 
 N_BOOT = 1000
 SEED = 0
 OIL = list(OIL_WINDAGE_RANGE)
+LOW, HIGH = "oil_3pct", "oil_4pct"
 MATRICES = ["undrogued"] + OIL
 SHORT_COASTS = ["Atlantic & Cape", "SA south & east", "S Mozambique", "C & N Mozambique",
                 "W & S Madagascar", "E Madagascar"]
@@ -42,140 +45,132 @@ SERIES = {"undrogued": ("#eb6834", "s", "Undrogued"), "oil_3pct": ("#86d6b5", "o
           "oil": ("#1baf7a", "D", "Oil 3.5%"), "oil_4pct": ("#0b6b49", "^", "Oil 4%")}
 HORIZON_DAYS = 30
 YEAR_DAYS = 365
-
-
-def interval(x):
-    with np.errstate(all="ignore"):
-        return np.nanpercentile(x, [2.5, 97.5], axis=0)
-
 EXIT_NAMES = EXIT_LABELS[:STRANDED]
 
+# Rows of W are releases (all traffic, each route, then each release point) spread over the ocean cells
+Releases = namedtuple("Releases", "W names kinds")
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
-    check_coast_box(args.box)
-    RES, TAU = args.res, args.tau
-    TAG = setting_tag(RES, TAU, args.box)
-    LOW, HIGH = "oil_3pct", "oil_4pct"
 
-    os.makedirs("figures", exist_ok=True)
+# ── Operators, per-drifter counts and releases ───────────────────────────────
 
-    # ── 1. Operators, per-drifter counts and releases ────────────────────────
-    ops = {name: load_operator(operator_path(f"{name}_coast", RES, TAU, args.box)) for name in MATRICES}
-    op0 = ops["oil"]
-    cells = op0["cell_flat"]
-    n_cells, n_states = len(cells), op0["P"].shape[0]
-    n_lon, _ = grid_shape(args.box, RES)
-    counts_file = np.load(f"data/coast_counts_{TAG}.npz")
-    if int(counts_file["n_states"]) != n_states:
-        raise SystemExit("data/coast_counts_….npz does not match the coast operators; rerun coastal_stranding.")
-    counts = {name: tuple(counts_file[f"{name}_{part}"] for part in ("d_idx", "ft", "n"))
-              + (int(counts_file[f"{name}_n_drifters"]),) for name in MATRICES}
-    if len({counts[name][3] for name in OIL}) != 1:
-        raise SystemExit("The oil matrices do not share their drifters; rerun oil_wind and coastal_stranding.")
+def load_releases(op, traffic_path, points):
+    """Traffic releases from traffic_exposure, then one release per release point."""
+    traffic = np.load(traffic_path, allow_pickle=True)
+    point_rows = np.zeros((len(points), len(op["cell_flat"])))
+    point_rows[np.arange(len(points)), [state_of(op, r.lon, r.lat) for r in points.itertuples()]] = 1.0
+    return Releases(W=np.vstack([traffic["W"], point_rows]),
+                    names=np.r_[traffic["releases"].astype(str), points["name"].values],
+                    kinds=np.r_[["traffic"] * len(traffic["W"]), ["point"] * len(points)])
 
-    traffic = np.load(f"data/traffic_releases_{TAG}.npz", allow_pickle=True)
-    points = pd.read_csv(release_points_path(args.box))[["name", "lon", "lat"]]
-    point_rows = np.zeros((len(points), n_cells))
-    point_rows[np.arange(len(points)), [state_of(op0, r.lon, r.lat) for r in points.itertuples()]] = 1.0
-    W = np.vstack([traffic["W"], point_rows])
-    RELEASES = np.r_[traffic["releases"].astype(str), points["name"].values]
-    kinds = np.r_[["traffic"] * len(traffic["W"]), ["point"] * len(points)]
-    horizon_steps = int(round(HORIZON_DAYS / TAU))
-    year_steps = int(round(YEAR_DAYS / TAU))
-    decay_days = float(op0["decay_days"])
 
-    # ── 2. Outcomes of one matrix ────────────────────────────────────────────
-    def outcomes(P):
-        """Per release: stranding per coast eventually and within HORIZON_DAYS, days
+# ── Outcomes of one matrix ───────────────────────────────────────────────────
+
+def outcomes(P, W, n_cells, tau, decay_days):
+    """Per release: stranding per coast eventually and within HORIZON_DAYS, days
     to strand, exits, and the share of oil mass stranded within a year."""
-        fate, visits = stranding_chain(P, n_cells, STRANDED)
-        wf = W @ fate
-        total = wf[:, STRANDED:].sum(axis=1)
-        with np.errstate(invalid="ignore", divide="ignore"):
-            days = np.where(total > 0, W @ visits / total * TAU, np.nan)
-        p = np.zeros((len(W), n_states))
-        p[:, :n_cells] = W
-        prev = p[:, n_cells + STRANDED:].copy()
-        mass = np.zeros((len(W), len(COAST_LABELS)))
-        for step in range(1, year_steps + 1):
-            p = p @ P
-            new = p[:, n_cells + STRANDED:]
-            mass += (new - prev) * np.exp(-step * TAU / decay_days)
-            prev = new.copy()
-            if step == horizon_steps:
-                within = new.copy()
-        return {"eventual": wf[:, STRANDED:], "within": within, "days": days, "exit": wf[:, :STRANDED], "mass": mass}
+    horizon_steps = int(round(HORIZON_DAYS / tau))
+    fate, visits = stranding_chain(P, n_cells, STRANDED)
+    wf = W @ fate
+    total = wf[:, STRANDED:].sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        days = np.where(total > 0, W @ visits / total * tau, np.nan)
+    p = np.zeros((len(W), P.shape[0]))
+    p[:, :n_cells] = W
+    prev = p[:, n_cells + STRANDED:].copy()
+    mass = np.zeros((len(W), len(COAST_LABELS)))
+    for step in range(1, int(round(YEAR_DAYS / tau)) + 1):
+        p = p @ P
+        new = p[:, n_cells + STRANDED:]
+        mass += (new - prev) * np.exp(-step * tau / decay_days)
+        prev = new.copy()
+        if step == horizon_steps:
+            within = new.copy()
+    return {"eventual": wf[:, STRANDED:], "within": within, "days": days, "exit": wf[:, :STRANDED], "mass": mass}
 
+
+def resample_all(ops, counts, W, args):
+    """Outcomes of every matrix on the full data and on N_BOOT resamples of its drifters.
+    The same seed for each matrix redraws the same drifters for all the oil matrices."""
+    n_lon, _ = grid_shape(args.box, args.res)
+    decay_days = float(ops["oil"]["decay_days"])
     full, draws = {}, {}
     for name in MATRICES:
-        full[name] = outcomes(ops[name]["P"])
-        # The same seed for each matrix redraws the same drifters for all the oil matrices
+        op = ops[name]
+        n_cells, n_states = len(op["cell_flat"]), op["P"].shape[0]
+        full[name] = outcomes(op["P"], W, n_cells, args.tau, decay_days)
         rng = np.random.default_rng(SEED)
         collected = {}
         for _ in range(N_BOOT):
-            Pb = row_normalise(resampled_counts(counts[name], n_states, rng), cells, n_lon)[0]
-            for key, value in outcomes(Pb).items():
+            Pb = row_normalise(resampled_counts(counts[name], n_states, rng), op["cell_flat"], n_lon)[0]
+            for key, value in outcomes(Pb, W, n_cells, args.tau, decay_days).items():
                 collected.setdefault(key, []).append(value)
         draws[name] = {key: np.array(value) for key, value in collected.items()}
         print(f"{name:<10} {counts[name][3]:,} drifters resampled {N_BOOT} times")
+    return full, draws
 
-    # ── 3. Long tables ───────────────────────────────────────────────────────
+
+# ── Long tables ──────────────────────────────────────────────────────────────
+
+def outcome_table(full, draws, rel):
+    """Every matrix's outcomes per release and target, with their intervals."""
+    n = len(rel.W)
+
+    def rows_of(name, metric, target, est, lo_hi):
+        return [{"matrix": name, "release": rel.names[r], "kind": rel.kinds[r], "metric": metric, "target": target,
+                 "estimate": est[r], "lo": lo_hi[0][r], "hi": lo_hi[1][r]} for r in range(n)]
+
     rows = []
     for name in MATRICES:
         for metric, targets in [("eventual", COAST_LABELS), ("within", COAST_LABELS), ("mass", COAST_LABELS),
                                 ("exit", EXIT_NAMES)]:
             est, lo_hi = full[name][metric], interval(draws[name][metric])
             for k, target in enumerate(targets):
-                rows += [{"matrix": name, "release": RELEASES[r], "kind": kinds[r], "metric": metric, "target": target,
-                          "estimate": est[r, k], "lo": lo_hi[0][r, k], "hi": lo_hi[1][r, k]} for r in range(len(W))]
+                rows += rows_of(name, metric, target, est[:, k], (lo_hi[0][:, k], lo_hi[1][:, k]))
             if metric != "exit":
-                lo_hi = interval(draws[name][metric].sum(axis=2))
-                rows += [{"matrix": name, "release": RELEASES[r], "kind": kinds[r], "metric": metric, "target": "any",
-                          "estimate": est[r].sum(), "lo": lo_hi[0][r], "hi": lo_hi[1][r]} for r in range(len(W))]
-        lo_hi = interval(draws[name]["days"])
-        rows += [{"matrix": name, "release": RELEASES[r], "kind": kinds[r], "metric": "days", "target": "any",
-                  "estimate": full[name]["days"][r], "lo": lo_hi[0][r], "hi": lo_hi[1][r]} for r in range(len(W))]
-    table = pd.DataFrame(rows)
+                rows += rows_of(name, metric, "any", est.sum(axis=1), interval(draws[name][metric].sum(axis=2)))
+        rows += rows_of(name, "days", "any", full[name]["days"], interval(draws[name]["days"]))
+    return pd.DataFrame(rows)
 
-    # 4% − 3% on the same drifters
-    diff_rows = []
+
+def difference_table(full, draws, rel):
+    """4% − 3% on the same drifters, per release and target."""
+    def rows_of(metric, target, est, d):
+        lo, hi = interval(d)
+        return [{"release": rel.names[r], "kind": rel.kinds[r], "metric": metric, "target": target,
+                 "difference": est[r], "lo": lo[r], "hi": hi[r], "beyond_noise": lo[r] > 0 or hi[r] < 0}
+                for r in range(len(rel.W))]
+
+    rows = []
     for metric in ["eventual", "within"]:
         delta = draws[HIGH][metric] - draws[LOW][metric]
         est = full[HIGH][metric] - full[LOW][metric]
         for k, target in enumerate(np.r_[COAST_LABELS, ["any"]]):
-            d = delta.sum(axis=2) if target == "any" else delta[:, :, k]
-            e = est.sum(axis=1) if target == "any" else est[:, k]
-            lo, hi = interval(d)
-            diff_rows += [{"release": RELEASES[r], "kind": kinds[r], "metric": metric, "target": target, "difference": e[r],
-                           "lo": lo[r], "hi": hi[r], "beyond_noise": lo[r] > 0 or hi[r] < 0} for r in range(len(W))]
-    delta_days = draws[HIGH]["days"] - draws[LOW]["days"]
-    lo, hi = interval(delta_days)
-    diff_rows += [{"release": RELEASES[r], "kind": kinds[r], "metric": "days", "target": "any",
-                   "difference": full[HIGH]["days"][r] - full[LOW]["days"][r], "lo": lo[r], "hi": hi[r],
-                   "beyond_noise": lo[r] > 0 or hi[r] < 0} for r in range(len(W))]
-    diffs = pd.DataFrame(diff_rows)
+            if target == "any":
+                rows += rows_of(metric, target, est.sum(axis=1), delta.sum(axis=2))
+            else:
+                rows += rows_of(metric, target, est[:, k], delta[:, :, k])
+    rows += rows_of("days", "any", full[HIGH]["days"] - full[LOW]["days"], draws[HIGH]["days"] - draws[LOW]["days"])
+    return pd.DataFrame(rows)
 
-    # ── 4. Method flag at each windage ───────────────────────────────────────
-    flag_rows = []
+
+def method_flags(points, args):
+    """Release points where oil and its drogued check differ by TVD > DISAGREE_TVD at 30 days, at each windage."""
+    rows = []
     for name, alpha in OIL_WINDAGE_RANGE.items():
-        oil = load_operator(operator_path(name, RES, TAU, args.box))
-        check = load_operator(operator_path(name.replace("oil", "oil_check"), RES, TAU, args.box))
+        oil = load_operator(operator_path(name, args.res, args.tau, args.box))
+        check = load_operator(operator_path(name.replace("oil", "oil_check"), args.res, args.tau, args.box))
         for r in points.itertuples():
             a = propagate(oil, release(oil, r.lon, r.lat), days=HORIZON_DAYS)
             b = propagate(check, release(check, r.lon, r.lat), days=HORIZON_DAYS)
             tvd = 0.5 * np.abs(a - b).sum()
-            flag_rows.append({"name": r.name, "windage": alpha, "tvd_30d": tvd, "method_flag": tvd > DISAGREE_TVD})
-    flags = pd.DataFrame(flag_rows)
+            rows.append({"name": r.name, "windage": alpha, "tvd_30d": tvd, "method_flag": tvd > DISAGREE_TVD})
+    return pd.DataFrame(rows)
 
-    out_table, out_diff, out_flags = [f"data/oil_windage{part}_{TAG}.csv" for part in ("", "_difference", "_method_flags")]
-    table.to_csv(out_table, index=False)
-    diffs.to_csv(out_diff, index=False)
-    flags.to_csv(out_flags, index=False)
 
-    # ── 5. Figure: all traffic by coast, and each route ──────────────────────
-    routes = [r for r, k in zip(RELEASES, kinds) if k == "traffic"]
+# ── Figure: all traffic by coast, and each route ─────────────────────────────
+
+def plot_windage(table, rel, args, path):
+    routes = [r for r, k in zip(rel.names, rel.kinds) if k == "traffic"]
     fig, axes = plt.subplots(1, 2, figsize=(14, 5.2))
     offsets = dict(zip(MATRICES, np.linspace(-0.27, 0.27, len(MATRICES))))
     for ax, targets, labels, pick, title in [
@@ -195,47 +190,77 @@ def main(argv=None):
         ax.set_title(title, fontsize=11)
         ax.grid(axis="x", alpha=0.3)
     axes[0].legend(fontsize=9, loc="lower right")
-    fig.suptitle(f"Oil windage range — {RES:g}°, τ = {TAU:g} d", fontsize=12)
-    out_png = f"figures/agulhas_oil_windage_{TAG}.png"
-    plt.savefig(out_png, dpi=150, bbox_inches="tight")
-    plt.close()
+    fig.suptitle(f"Oil windage range — {args.res:g}°, τ = {args.tau:g} d", fontsize=12)
+    save_figure(path)
 
-    # ── 6. Summary ───────────────────────────────────────────────────────────
+
+# ── Summary ──────────────────────────────────────────────────────────────────
+
+def pivot(table, rel, metric, target, kind="traffic", scale=100, digits=0):
+    """Estimate and interval per release (rows) and matrix (columns), as text."""
+    g = table[(table["metric"] == metric) & (table["target"] == target) & (table["kind"] == kind)]
+    text = g.assign(text=[f"{scale * e:.{digits}f} ({scale * lo:.{digits}f}–{scale * hi:.{digits}f})"
+                          for e, lo, hi in zip(g["estimate"], g["lo"], g["hi"])])
+    return text.pivot(index="release", columns="matrix", values="text")[MATRICES].reindex(
+        [r for r, k in zip(rel.names, rel.kinds) if k == kind])
+
+
+def print_stranding(table, rel, decay_days):
     pd.set_option("display.width", 220)
-
-    def show(metric, target, kind="traffic", scale=100, digits=0):
-        g = table[(table["metric"] == metric) & (table["target"] == target) & (table["kind"] == kind)]
-        text = g.assign(text=[f"{scale * e:.{digits}f} ({scale * lo:.{digits}f}–{scale * hi:.{digits}f})"
-                              for e, lo, hi in zip(g["estimate"], g["lo"], g["hi"])])
-        return text.pivot(index="release", columns="matrix", values="text")[MATRICES].reindex(
-            [r for r, k in zip(RELEASES, kinds) if k == kind])
-
     print("\nEventually stranded, any coast (%):")
-    print(show("eventual", "any").to_string())
+    print(pivot(table, rel, "eventual", "any").to_string())
     print(f"\nStranded within {HORIZON_DAYS} days, any coast (%):")
-    print(show("within", "any").to_string())
+    print(pivot(table, rel, "within", "any").to_string())
     print("\nDays to strand, among material that strands:")
-    print(show("days", "any", scale=1).to_string())
+    print(pivot(table, rel, "days", "any", scale=1).to_string())
     print("\nAll traffic, eventually stranded by coast (%):")
     coast_rows = table[(table["release"] == "all") & (table["metric"] == "eventual") & (table["target"] != "any")]
     print(coast_rows.assign(text=[f"{100 * e:.1f} ({100 * lo:.1f}–{100 * hi:.1f})" for e, lo, hi
                                   in zip(coast_rows["estimate"], coast_rows["lo"], coast_rows["hi"])])
           .pivot(index="target", columns="matrix", values="text")[MATRICES].reindex(COAST_LABELS).to_string())
     print(f"\nOil mass stranded within a year, any coast, with exp(−t / {decay_days:g} d) (%):")
-    print(show("mass", "any", digits=1).to_string())
+    print(pivot(table, rel, "mass", "any", digits=1).to_string())
     print("\nRelease points, eventually stranded, any coast (%):")
-    print(show("eventual", "any", kind="point").to_string())
+    print(pivot(table, rel, "eventual", "any", kind="point").to_string())
+
+
+def print_differences(diffs, flags, order):
     print("\n4% − 3% on the same drifters, all traffic and routes (points):")
     sub = diffs[(diffs["kind"] == "traffic") & (diffs["target"] == "any")]
     print(sub.assign(difference=lambda d: d["difference"].where(d["metric"] == "days", 100 * d["difference"]),
                      lo=lambda d: d["lo"].where(d["metric"] == "days", 100 * d["lo"]),
                      hi=lambda d: d["hi"].where(d["metric"] == "days", 100 * d["hi"]))
           [["release", "metric", "difference", "lo", "hi", "beyond_noise"]].round(1).to_string(index=False))
-    order = points["name"].tolist()
     print(f"\nMethod flags (oil against its check, TVD > {DISAGREE_TVD} at {HORIZON_DAYS} d):")
     print(flags.pivot(index="name", columns="windage", values="tvd_30d").reindex(order).round(2).to_string())
     print("Flagged at each windage: " + ", ".join(f"{100 * a:g}%: {int(g['method_flag'].sum())} of {len(g)}"
                                                   for a, g in flags.groupby("windage")))
+
+
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    check_coast_box(args.box)
+    tag = setting_tag(args.res, args.tau, args.box)
+    out_table, out_diff, out_flags = [f"data/oil_windage{part}_{tag}.csv" for part in ("", "_difference", "_method_flags")]
+    out_png = f"figures/agulhas_oil_windage_{tag}.png"
+
+    ops = {name: load_operator(operator_path(f"{name}_coast", args.res, args.tau, args.box)) for name in MATRICES}
+    counts = load_coast_counts(f"data/coast_counts_{tag}.npz", MATRICES, ops["oil"]["P"].shape[0])
+    if len({counts[name][3] for name in OIL}) != 1:
+        raise SystemExit("The oil matrices do not share their drifters; rerun oil_wind and coastal_stranding.")
+    points = pd.read_csv(release_points_path(args.box))[["name", "lon", "lat"]]
+    rel = load_releases(ops["oil"], f"data/traffic_releases_{tag}.npz", points)
+
+    full, draws = resample_all(ops, counts, rel.W, args)
+    table, diffs = outcome_table(full, draws, rel), difference_table(full, draws, rel)
+    flags = method_flags(points, args)
+    table.to_csv(out_table, index=False)
+    diffs.to_csv(out_diff, index=False)
+    flags.to_csv(out_flags, index=False)
+
+    plot_windage(table, rel, args, out_png)
+    print_stranding(table, rel, float(ops["oil"]["decay_days"]))
+    print_differences(diffs, flags, points["name"].tolist())
     print(f"\nSaved → {out_table}, {out_diff}, {out_flags}, {out_png}")
 
 

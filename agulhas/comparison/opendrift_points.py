@@ -21,8 +21,8 @@ import time
 import numpy as np
 import pandas as pd
 
-from agulhas.opendrift_common import FORCING, HOURS, N_COASTS, OUT, YEARS, classify, simulate
 from agulhas.config import grid_shape, operator_path, parse_args, release_points_path
+from agulhas.opendrift_common import FORCING, HOURS, N_COASTS, OUT, YEARS, classify, simulate
 from agulhas.transport import check_coast_box, load_operator
 
 N_PER_POINT = 500
@@ -40,6 +40,56 @@ def seed_cell(land, lon, lat, res, n, rng):
     return np.array(xs[:n]), np.array(ys[:n])
 
 
+# ── 1. The matrix's states ───────────────────────────────────────────────────
+
+class MatrixStates:
+    """The oil coast matrix's states, which particles are sorted into: its ocean cells,
+    the four exits, the six coasts and one for a position it has no state for."""
+
+    def __init__(self, args):
+        op = load_operator(operator_path("oil_coast", args.res, args.tau, args.box))
+        cells = op["cell_flat"].astype(int)
+        self.box = args.box
+        self.n_cells = len(cells)
+        self.n_states = self.n_cells + 4 + N_COASTS + 1
+        self.cell_state = {int(f): s for s, f in enumerate(cells)}
+        self.n_lon, _ = grid_shape(args.box, args.res)
+
+    def counts(self, lon, lat, marker, stranded, last, n_points):
+        """Particles in each state, per release point and horizon."""
+        counts = np.zeros((n_points, len(HOURS), self.n_states), int)
+        for h, hour in enumerate(HOURS.values()):
+            state = classify(lon, lat, stranded, last, hour, self.cell_state, self.n_cells, self.box, self.n_lon)
+            for k in range(n_points):
+                counts[k, h] = np.bincount(state[marker == k], minlength=self.n_states)
+        return counts
+
+
+# ── 2. One run for each start date ───────────────────────────────────────────
+
+def seed_points(land, points, res, rng):
+    """N_PER_POINT particles in each release point's cell, with the point's number as marker."""
+    xs, ys, marks = [], [], []
+    for k, p in points.iterrows():
+        x, y = seed_cell(land, p.lon, p.lat, res, N_PER_POINT, rng)
+        xs.append(x)
+        ys.append(y)
+        marks.append(np.full(N_PER_POINT, k))
+    return np.concatenate(xs), np.concatenate(ys), np.concatenate(marks)
+
+
+def run_start(year, month, points, land, states, res, path):
+    """One OceanDrift run from the 1st of the month, with its counts saved to path."""
+    began = time.time()
+    seed = year * 100 + month
+    x, y, marks = seed_points(land, points, res, np.random.default_rng(seed))
+    lon, lat, marker, stranded, last = simulate(datetime(year, month, 1), x, y, marks, max(HOURS.values()), seed)
+    counts = states.counts(lon, lat, marker, stranded, last, len(points))
+    np.savez_compressed(path + ".tmp.npz", counts=counts)
+    os.replace(path + ".tmp.npz", path)
+    print(f"{year}-{month:02d}: {time.time() - began:.0f} s, no matching state {counts[:, :, -1].sum()}", flush=True)
+
+
 def main(argv=None):
     """Run this step; see the module docstring for what it does."""
     from roaring_landmask import RoaringLandmask
@@ -51,41 +101,13 @@ def main(argv=None):
     check_coast_box(args.box)
     os.makedirs(f"{OUT}/points", exist_ok=True)
     points = pd.read_csv(release_points_path(args.box))
-    op = load_operator(operator_path("oil_coast", args.res, args.tau, args.box))
-    cells = op["cell_flat"].astype(int)
-    n_cells = len(cells)
-    n_states = n_cells + 4 + N_COASTS + 1
-    cell_state = {int(f): s for s, f in enumerate(cells)}
-    n_lon, _ = grid_shape(args.box, args.res)
+    states = MatrixStates(args)
     land = RoaringLandmask.new()
-
-    # ── 1. One run for each start date ───────────────────────────────────────
     for year in args.years:
         for month in range(1, 13):
             path = f"{OUT}/points/{year}{month:02d}.npz"
-            if os.path.exists(path):
-                continue
-            began = time.time()
-            seed = year * 100 + month
-            rng = np.random.default_rng(seed)
-            xs, ys, marks = [], [], []
-            for k, p in points.iterrows():
-                x, y = seed_cell(land, p.lon, p.lat, args.res, N_PER_POINT, rng)
-                xs.append(x)
-                ys.append(y)
-                marks.append(np.full(N_PER_POINT, k))
-            lon, lat, marker, stranded, last = simulate(datetime(year, month, 1), np.concatenate(xs), np.concatenate(ys),
-                                                        np.concatenate(marks), max(HOURS.values()), seed)
-
-            # ── 2. Counts in each state, at each horizon ─────────────────────
-            counts = np.zeros((len(points), len(HOURS), n_states), int)
-            for h, hour in enumerate(HOURS.values()):
-                state = classify(lon, lat, stranded, last, hour, cell_state, n_cells, args.box, n_lon)
-                for k in range(len(points)):
-                    counts[k, h] = np.bincount(state[marker == k], minlength=n_states)
-            np.savez_compressed(path + ".tmp.npz", counts=counts)
-            os.replace(path + ".tmp.npz", path)
-            print(f"{year}-{month:02d}: {time.time() - began:.0f} s, no matching state {counts[:, :, -1].sum()}", flush=True)
+            if not os.path.exists(path):
+                run_start(year, month, points, land, states, args.res, path)
     print(f"Forcing read from {FORCING}; counts saved → {OUT}/points/")
 
 

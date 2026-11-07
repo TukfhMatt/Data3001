@@ -64,6 +64,11 @@ def check_box_in_subset(box, data):
                          f"lat {lat_min:g} to {lat_max:g}). Fetch it with fetch_gdp_subset and pass that file with --data.")
 
 
+def reference_grid(args):
+    """The grid a many-grid step draws its maps on: the default grid if it was given."""
+    return RES if RES in args.res else args.res[0]
+
+
 def grid_shape(box, res):
     """(n_lon, n_lat) cells of size res from the box's south-west corner. When a
     side is not a multiple of res, the last row/column is a partial cell cut
@@ -98,6 +103,11 @@ def setting_tag(res, tau, box):
     settings never overwrite each other, e.g. '1deg_3p5d_10E-55E_45S-15S' or
     '0p5-1-2deg_3p5d_10E-55E_45S-15S'."""
     return f"{_join(res)}deg_{_join(tau)}d_{box_tag(box)}"
+
+
+def lag_tag(tau, box):
+    """File tag for a step that depends on the lag but not the grid, e.g. '3p5d_10E-55E_45S-15S'."""
+    return f"{_tag(tau)}d_{box_tag(box)}"
 
 
 def region_prefix(data):

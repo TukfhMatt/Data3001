@@ -16,51 +16,34 @@ Needs the matrices from transition_matrix.
     python -m agulhas residence_time --res 0.5 1 2 --tau 3.5
 """
 
-import os
-
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 
-from agulhas.config import DROGUE_TYPES, RES, operator_path, parse_args, place_label, region_prefix, setting_tag
-from agulhas.transport import absorption, cell_centres, load_operator, reliable, to_grid
+from agulhas.config import DROGUE_TYPES, parse_args, place_label, reference_grid, region_prefix, setting_tag
+from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
+from agulhas.transport import absorption, cell_centres, each_operator, reliable, to_grid
 
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, multi=True, argv=argv)
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    TAG = setting_tag(args.res, args.tau, args.box)
-    MAP_RES = RES if RES in args.res else args.res[0]
+def residence_of(res, tau, name, op):
+    """One matrix's residence time: (summary row, table of cells, days per cell)."""
+    steps, _ = absorption(op)
+    days = tau * (steps - 0.5)
+    ok = reliable(op)
+    lon, lat = cell_centres(op)
+    d = days[ok]
+    top = np.argmax(np.where(ok, days, -np.inf))
+    row = {"res": res, "tau": tau, "drogue": name, "reliable_cells": int(ok.sum()),
+           "mean_days": d.mean(), "median_days": np.median(d),
+           "q25_days": np.percentile(d, 25), "q75_days": np.percentile(d, 75),
+           "q90_days": np.percentile(d, 90), "max_days": d.max(),
+           "max_lon": lon[top], "max_lat": lat[top]}
+    cells = pd.DataFrame({"res": res, "tau": tau, "drogue": name, "lon": lon, "lat": lat,
+                          "residence_days": days, "reliable": ok, "drifters": op["row_drifters"]})
+    return row, cells, days
 
-    os.makedirs("figures", exist_ok=True)
 
-    # ── 1. Residence time per grid, lag and drogue type ──────────────────────
-    summary, cells_out, maps = [], [], {}
-    for tau in args.tau:
-        for res in args.res:
-            for name in DROGUE_TYPES:
-                op = load_operator(operator_path(name, res, tau, args.box))
-                steps, _ = absorption(op)
-                days = tau * (steps - 0.5)
-                ok = reliable(op)
-                lon, lat = cell_centres(op)
-                d = days[ok]
-                top = np.argmax(np.where(ok, days, -np.inf))
-                summary.append({"res": res, "tau": tau, "drogue": name, "reliable_cells": int(ok.sum()),
-                                "mean_days": d.mean(), "median_days": np.median(d),
-                                "q25_days": np.percentile(d, 25), "q75_days": np.percentile(d, 75),
-                                "q90_days": np.percentile(d, 90), "max_days": d.max(),
-                                "max_lon": lon[top], "max_lat": lat[top]})
-                cells_out.append(pd.DataFrame({"res": res, "tau": tau, "drogue": name, "lon": lon, "lat": lat,
-                                               "residence_days": days, "reliable": ok,
-                                               "drifters": op["row_drifters"]}))
-                if res == MAP_RES and tau == args.tau[0]:
-                    maps[name] = (op, np.where(ok, days, np.nan))
-
-    summary = pd.DataFrame(summary)
+def print_summary(summary):
     print("Expected residence time in R over reliable cells (days)")
     print(f"{'grid':>5} {'τ':>4} {'type':<10}{'cells':>7}{'mean':>7}{'median':>8}{'q25–q75':>12}{'q90':>6}"
           f"{'max':>6}  longest at")
@@ -69,37 +52,44 @@ def main(argv=None):
               f"{r.q25_days:>7.0f}–{r.q75_days:<4.0f}{r.q90_days:>6.0f}{r.max_days:>6.0f}  "
               f"{place_label(r.max_lon, r.max_lat)}")
 
-    out_summary = f"data/residence_time_{TAG}.csv"
-    out_cells = f"data/residence_time_cells_{TAG}.csv"
-    summary.to_csv(out_summary, index=False)
-    pd.concat(cells_out).to_csv(out_cells, index=False)
 
-    # ── 2. Map on the reference grid ─────────────────────────────────────────
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
-        subplot_kw = {"projection": ccrs.PlateCarree()}
-    except ImportError:
-        ccrs = None
-        subplot_kw = {}
-    kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
+def plot_residence(maps, args, map_res, path):
+    """Residence time per reliable cell on the reference grid, per drogue type."""
     vmax = np.nanpercentile(np.r_[maps["drogued"][1], maps["undrogued"][1]], 99)
-    fig, axes = plt.subplots(1, 2, figsize=(14, 4.6), subplot_kw=subplot_kw)
+    fig, axes = plt.subplots(1, 2, figsize=(14, 4.6), subplot_kw=MAP_KW)
     for ax, name in zip(axes, DROGUE_TYPES):
         op, days = maps[name]
         mesh = ax.pcolormesh(op["lon_edges"], op["lat_edges"], to_grid(op, days), cmap="viridis",
-                             vmin=0, vmax=vmax, **kw)
-        if ccrs:
-            ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
-            ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
-            ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
+                             vmin=0, vmax=vmax, **TRANSFORM_KW)
+        map_axes(ax, args.box)
         ax.set_title(f"{name.capitalize()}: median {np.nanmedian(days):.0f} days", fontsize=10)
     cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="max")
     cb.set_label("Expected time afloat in R (days)")
-    fig.suptitle(f"Residence time from each reliable cell — {MAP_RES:g}°, τ = {args.tau[0]:g} d", fontsize=12)
-    out_png = f"figures/{region_prefix(args.data)}_residence_time_{TAG}.png"
-    plt.savefig(out_png, dpi=150, bbox_inches="tight")
-    plt.close()
+    fig.suptitle(f"Residence time from each reliable cell — {map_res:g}°, τ = {args.tau[0]:g} d", fontsize=12)
+    save_figure(path)
+
+
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, multi=True, argv=argv)
+    tag = setting_tag(args.res, args.tau, args.box)
+    map_res = reference_grid(args)
+    out_summary = f"data/residence_time_{tag}.csv"
+    out_cells = f"data/residence_time_cells_{tag}.csv"
+    out_png = f"figures/{region_prefix(args.data)}_residence_time_{tag}.png"
+
+    rows, cells, maps = [], [], {}
+    for res, tau, name, op in each_operator(args):
+        row, cell_table, days = residence_of(res, tau, name, op)
+        rows.append(row)
+        cells.append(cell_table)
+        if res == map_res and tau == args.tau[0]:
+            maps[name] = (op, np.where(reliable(op), days, np.nan))
+
+    summary = pd.DataFrame(rows)
+    print_summary(summary)
+    summary.to_csv(out_summary, index=False)
+    pd.concat(cells).to_csv(out_cells, index=False)
+    plot_residence(maps, args, map_res, out_png)
     print(f"\nSaved → {out_summary}\nSaved → {out_cells}\nSaved → {out_png}")
 
 

@@ -20,39 +20,31 @@ import re
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-from agulhas.config import DROGUE_TYPES, operator_path, parse_args, place_label, region_prefix, release_points_path, setting_tag
+from agulhas.config import (DROGUE_TYPES, operator_path, parse_args, place_label, region_prefix, release_points_path,
+                            setting_tag)
+from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
 from agulhas.transport import load_operator, release, to_grid
 
 DAYS = [7, 30, 365]
 
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    RES, TAU = args.res, args.tau
-    TAG = setting_tag(RES, TAU, args.box)
+def load_intervals(tag, res, tau):
+    path = f"data/bootstrap_release_{tag}.csv"
+    if not os.path.exists(path):
+        raise SystemExit(f"{path} not found: run bootstrap with --res {res:g} --tau {tau:g} first.")
+    return pd.read_csv(path).set_index(["name", "drogue", "metric", "days"])
 
-    os.makedirs("figures", exist_ok=True)
 
-    # ── 1. Release points, matrices and bootstrap intervals ──────────────────
-    points = pd.read_csv(release_points_path(args.box))
-    ops = {name: load_operator(operator_path(name, RES, TAU, args.box)) for name in DROGUE_TYPES}
+def propagate_points(points, ops, boot, tau):
+    """Every point under every matrix and horizon: (long table with intervals, distributions).
+    Stops if an estimate differs from the one the intervals were computed around."""
     labels = [str(x) for x in ops["drogued"]["exit_labels"]]
     n_cells = len(ops["drogued"]["cell_flat"])
-    steps = {d: int(round(d / TAU)) for d in DAYS}
+    steps = {d: int(round(d / tau)) for d in DAYS}
     powers = {name: {d: np.linalg.matrix_power(op["P"], steps[d]) for d in DAYS} for name, op in ops.items()}
-    boot_csv = f"data/bootstrap_release_{TAG}.csv"
-    if not os.path.exists(boot_csv):
-        raise SystemExit(f"{boot_csv} not found: run bootstrap with --res {RES:g} --tau {TAU:g} first.")
-    boot = pd.read_csv(boot_csv).set_index(["name", "drogue", "metric", "days"])
-
-    # ── 2. Propagate each point ──────────────────────────────────────────────
     rows, dists = [], {}
     for pt in points.itertuples():
         for name, op in ops.items():
@@ -64,63 +56,70 @@ def main(argv=None):
                 for metric, value in fate.items():
                     b = boot.loc[(pt.name, name, metric, d)]
                     if abs(b.estimate - value) > 1e-6:
-                        raise SystemExit(f"{pt.name} {name} {metric} {d} d differs from 06: rerun bootstrap")
+                        raise SystemExit(f"{pt.name} {name} {metric} {d} d differs from bootstrap: rerun it")
                     rows.append({"name": pt.name, "kind": pt.kind, "lon": pt.lon, "lat": pt.lat, "drogue": name,
-                                 "days": d, "model_days": steps[d] * TAU, "metric": metric, "estimate": value,
+                                 "days": d, "model_days": steps[d] * tau, "metric": metric, "estimate": value,
                                  "ci_low": b.ci_low, "ci_high": b.ci_high})
-    table = pd.DataFrame(rows)
-    out_csv = f"data/release_point_maps_{TAG}.csv"
-    table.to_csv(out_csv, index=False)
+    return pd.DataFrame(rows), dists
 
-    def fmt(name, drogue, metric, d):
-        r = table[(table.name == name) & (table.drogue == drogue) & (table.metric == metric) & (table.days == d)].iloc[0]
-        return f"{r.estimate:.0%} ({r.ci_low:.0%}–{r.ci_high:.0%})"
 
-    print(f"Release points after 1 year, estimate (95% interval), {RES:g}°, τ = {TAU:g} d")
+def formatted(table, name, drogue, metric, d):
+    """'estimate (low–high)' for one point, matrix, metric and horizon."""
+    r = table[(table.name == name) & (table.drogue == drogue) & (table.metric == metric) & (table.days == d)].iloc[0]
+    return f"{r.estimate:.0%} ({r.ci_low:.0%}–{r.ci_high:.0%})"
+
+
+def print_one_year(table, points, labels, res, tau):
+    print(f"Release points after 1 year, estimate (95% interval), {res:g}°, τ = {tau:g} d")
     metrics = ["in_R"] + [f"exit_{lab}" for lab in labels]
     print(f"{'':<28}{'type':<11}" + "".join(f"{m.replace('exit_', ''):>16}" for m in metrics))
     for pt in points.itertuples():
         for name in DROGUE_TYPES:
-            print(f"{pt.name[:27]:<28}{name:<11}" + "".join(f"{fmt(pt.name, name, m, 365):>16}" for m in metrics))
+            print(f"{pt.name[:27]:<28}{name:<11}"
+                  + "".join(f"{formatted(table, pt.name, name, m, 365):>16}" for m in metrics))
 
-    # ── 3. One figure per point ──────────────────────────────────────────────
-    try:
-        import cartopy.crs as ccrs
-        import cartopy.feature as cfeature
-        subplot_kw = {"projection": ccrs.PlateCarree()}
-    except ImportError:
-        ccrs = None
-        subplot_kw = {}
-    kw = {"transform": ccrs.PlateCarree()} if ccrs else {}
-    saved = []
+
+def plot_point(pt, ops, dists, table, labels, args, path):
+    """One figure for one point: rows are drogue types, columns are horizons."""
+    fig, axes = plt.subplots(2, 3, figsize=(16, 7.2), subplot_kw=MAP_KW)
+    for row, name in enumerate(DROGUE_TYPES):
+        op = ops[name]
+        for col, d in enumerate(DAYS):
+            ax = axes[row, col]
+            grid = to_grid(op, dists[(pt.name, name, d)])
+            mesh = ax.pcolormesh(op["lon_edges"], op["lat_edges"], np.where(grid > 0, grid, np.nan),
+                                 cmap="Blues", norm=LogNorm(1e-4, 1), **TRANSFORM_KW)
+            ax.plot(pt.lon, pt.lat, marker="*", ms=12, color="#e8710a", mec="#222222", **TRANSFORM_KW)
+            map_axes(ax, args.box)
+            ax.set_title(f"{name.capitalize()}, {d} days: afloat in R {formatted(table, pt.name, name, 'in_R', d)}",
+                         fontsize=9)
+            text = "\n".join(f"{lab} {formatted(table, pt.name, name, f'exit_{lab}', d)}" for lab in labels)
+            ax.text(0.01, 0.02, text, transform=ax.transAxes, fontsize=7, va="bottom", zorder=5,
+                    bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"})
+    cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="min")
+    cb.set_label(f"Probability per {args.res:g}° cell (log)")
+    fig.suptitle(f"Release at {pt.name} ({place_label(pt.lon, pt.lat)}) — {args.res:g}°, τ = {args.tau:g} d; "
+                 f"95% drifter-bootstrap intervals", fontsize=12)
+    save_figure(path)
+
+
+def main(argv=None):
+    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    tag = setting_tag(args.res, args.tau, args.box)
+    prefix = region_prefix(args.data)
+    out_csv = f"data/release_point_maps_{tag}.csv"
+
+    points = pd.read_csv(release_points_path(args.box))
+    ops = {name: load_operator(operator_path(name, args.res, args.tau, args.box)) for name in DROGUE_TYPES}
+    labels = [str(x) for x in ops["drogued"]["exit_labels"]]
+    table, dists = propagate_points(points, ops, load_intervals(tag, args.res, args.tau), args.tau)
+    table.to_csv(out_csv, index=False)
+    print_one_year(table, points, labels, args.res, args.tau)
+
     for i, pt in enumerate(points.itertuples(), start=1):
-        fig, axes = plt.subplots(2, 3, figsize=(16, 7.2), subplot_kw=subplot_kw)
-        for row, name in enumerate(DROGUE_TYPES):
-            op = ops[name]
-            for col, d in enumerate(DAYS):
-                ax = axes[row, col]
-                grid = to_grid(op, dists[(pt.name, name, d)])
-                mesh = ax.pcolormesh(op["lon_edges"], op["lat_edges"], np.where(grid > 0, grid, np.nan),
-                                     cmap="Blues", norm=LogNorm(1e-4, 1), **kw)
-                ax.plot(pt.lon, pt.lat, marker="*", ms=12, color="#e8710a", mec="#222222", **kw)
-                if ccrs:
-                    ax.set_extent([LON_MIN, LON_MAX, LAT_MIN, LAT_MAX], crs=ccrs.PlateCarree())
-                    ax.add_feature(cfeature.LAND, color="#e6e6e6", zorder=2)
-                    ax.add_feature(cfeature.COASTLINE, linewidth=0.5, zorder=3)
-                ax.set_title(f"{name.capitalize()}, {d} days: afloat in R {fmt(pt.name, name, 'in_R', d)}", fontsize=9)
-                text = "\n".join(f"{lab} {fmt(pt.name, name, f'exit_{lab}', d)}" for lab in labels)
-                ax.text(0.01, 0.02, text, transform=ax.transAxes, fontsize=7, va="bottom", zorder=5,
-                        bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "none"})
-        cb = fig.colorbar(mesh, ax=axes, shrink=0.8, extend="min")
-        cb.set_label(f"Probability per {RES:g}° cell (log)")
-        fig.suptitle(f"Release at {pt.name} ({place_label(pt.lon, pt.lat)}) — {RES:g}°, τ = {TAU:g} d; "
-                     f"95% drifter-bootstrap intervals", fontsize=12)
         slug = re.sub(r"[^a-z0-9]+", "_", pt.name.lower()).strip("_")
-        out = f"figures/{region_prefix(args.data)}_release_{i:02d}_{slug}_{TAG}.png"
-        plt.savefig(out, dpi=150, bbox_inches="tight")
-        plt.close()
-        saved.append(out)
-    print(f"\nSaved → {out_csv}\nSaved → {len(saved)} figures, figures/{region_prefix(args.data)}_release_*_{TAG}.png")
+        plot_point(pt, ops, dists, table, labels, args, f"figures/{prefix}_release_{i:02d}_{slug}_{tag}.png")
+    print(f"\nSaved → {out_csv}\nSaved → {len(points)} figures, figures/{prefix}_release_*_{tag}.png")
 
 
 if __name__ == "__main__":

@@ -18,34 +18,25 @@ into the stranded state takes the drogue status of its start
 
 import numpy as np
 import pandas as pd
-import matplotlib
-matplotlib.use("Agg")  # non-interactive, headless
 import matplotlib.pyplot as plt
-import xarray as xr
 
-from agulhas.config import DROGUE_TYPES, _tag, box_tag, parse_args, region_prefix
-from agulhas.transport import STRAND_MATCH_S, move_indices, same_drogue, strand_times
+from agulhas.config import DROGUE_TYPES, lag_tag, parse_args, region_prefix
+from agulhas.drifters import Drifters, in_box
+from agulhas.plotting import save_figure
+from agulhas.transport import STRAND_MATCH_S, same_drogue
 
 GROUPS = {1: "ran aground", 3: "stopped transmitting"}
 
 
-def main(argv=None):
-    """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, lag=True, argv=argv)
-    LON_MIN, LON_MAX, LAT_MIN, LAT_MAX = args.box
-    TAU_DAYS = args.tau
-    TAG = f"{_tag(TAU_DAYS)}d_{box_tag(args.box)}"
+def great_circle_km(lon1, lat1, lon2, lat2):
+    p1, p2 = np.radians(lat1), np.radians(lat2)
+    dl = np.radians(lon2 - lon1)
+    return 6371.0 * np.arccos(np.clip(np.sin(p1) * np.sin(p2) + np.cos(p1) * np.cos(p2) * np.cos(dl), -1, 1))
 
-    # ── 1. Load subset ───────────────────────────────────────────────────────
-    ds = xr.open_dataset(args.data)
-    lon = ds["lon"].values.astype(float)
-    lat = ds["lat"].values.astype(float)
-    drogue = ds["drogue_status"].values.astype(bool)
-    t = ds["time"].values.astype("datetime64[s]").astype(np.int64)
-    traj_idx = np.repeat(np.arange(ds.sizes["traj"]), ds["rowsize"].values)
-    in_R = (lon >= LON_MIN) & (lon < LON_MAX) & (lat >= LAT_MIN) & (lat < LAT_MAX)
 
-    # ── 2. Drogue status at the end of each record that ends in R ────────────
+def record_ends(drifters, in_R):
+    """Per drifter whose record ends in R, how long before the end it lost its drogue."""
+    ds, drogue, t, lon, lat = drifters.ds, drifters.drogue, drifters.t, drifters.lon, drifters.lat
     row_end = np.cumsum(ds["rowsize"].values) - 1
     row_start = row_end - ds["rowsize"].values + 1
     end_s = ds["end_date"].values.astype("datetime64[s]").astype(np.int64)
@@ -63,73 +54,92 @@ def main(argv=None):
         else:
             i = a + np.where(st)[0][-1]                   # last drogued hour
             state, gap = "lost drogue", (t[b] - t[i]) / 86400
-            p1, p2 = np.radians(lat[i]), np.radians(lat[b])
-            dl = np.radians(lon[b] - lon[i])
-            km = 6371.0 * np.arccos(np.clip(np.sin(p1) * np.sin(p2) + np.cos(p1) * np.cos(p2) * np.cos(dl), -1, 1))
+            km = great_circle_km(lon[i], lat[i], lon[b], lat[b])
         rows.append({"traj": k, "fate": GROUPS[int(typedeath[k])], "state": state, "gap_days": gap,
                      "km_loss_to_end": km, "end_lon": lon[b], "end_lat": lat[b]})
-    df = pd.DataFrame(rows)
+    return pd.DataFrame(rows)
 
-    def summary(d, fate):
-        lost = d[d.state == "lost drogue"].gap_days
-        return {"fate": fate, "drifters": len(d),
-                "drogued_at_end": int((d.state == "drogued at end").sum()),
-                "never_drogued": int((d.state == "never drogued").sum()),
-                "lost_le_1d": int((lost <= 1).sum()),
-                "lost_1d_to_tau": int(((lost > 1) & (lost <= TAU_DAYS)).sum()),
-                "lost_gt_tau": int((lost > TAU_DAYS).sum()),
-                "share_lost_le_1d": (lost <= 1).sum() / len(d),
-                "median_gap_days": lost.median()}
 
-    table = pd.DataFrame([summary(df[df.fate == f], f) for f in GROUPS.values()])
+def summarise(ends, fate, tau):
+    """One fate's drifters, by when they lost the drogue."""
+    d = ends[ends.fate == fate]
+    lost = d[d.state == "lost drogue"].gap_days
+    return {"fate": fate, "drifters": len(d),
+            "drogued_at_end": int((d.state == "drogued at end").sum()),
+            "never_drogued": int((d.state == "never drogued").sum()),
+            "lost_le_1d": int((lost <= 1).sum()),
+            "lost_1d_to_tau": int(((lost > 1) & (lost <= tau)).sum()),
+            "lost_gt_tau": int((lost > tau).sum()),
+            "share_lost_le_1d": (lost <= 1).sum() / len(d),
+            "median_gap_days": lost.median()}
 
-    # ── 3. Stranding moves per drogue type under each rule ───────────────────
-    strand_t = strand_times(ds, traj_idx, t, in_R)
-    start, end, stranded = move_indices(traj_idx, t, in_R, TAU_DAYS, strand_t)
+
+def stranding_moves(drifters, in_R, strand_t, tau):
+    """Stranding moves each drogue type gets, under each rule for assigning them."""
+    drogue, traj_idx = drifters.drogue, drifters.traj_idx
+    start, end, stranded = drifters.moves(in_R, tau, strand_t)
     s, e = start[stranded], end[stranded]
-    moves = []
+    rows = []
     for name, flag in DROGUE_TYPES.items():
         for rule, keep in [("start", same_drogue(drogue, s, e, True, flag)),
                            ("both ends", (drogue[s] == flag) & (drogue[e] == flag))]:
-            moves.append({"drogue": name, "rule": rule, "stranding_moves": int(keep.sum()),
-                          "drifters": len(np.unique(traj_idx[s[keep]]))})
-    moves = pd.DataFrame(moves)
-    n_grounded = int((strand_t[row_end] >= 0).sum())
+            rows.append({"drogue": name, "rule": rule, "stranding_moves": int(keep.sum()),
+                         "drifters": len(np.unique(traj_idx[s[keep]]))})
+    return pd.DataFrame(rows)
 
-    out_cells = f"data/drogue_loss_{TAG}.csv"
-    out_sum = f"data/drogue_loss_summary_{TAG}.csv"
-    out_moves = f"data/drogue_loss_stranding_moves_{TAG}.csv"
-    df.to_csv(out_cells, index=False)
-    table.to_csv(out_sum, index=False)
-    moves.to_csv(out_moves, index=False)
 
-    # ── 4. Figure: time from drogue loss to end of record ────────────────────
+def plot_gaps(ends, tau, path):
+    """Time from drogue loss to the end of the record, per fate."""
     fig, ax = plt.subplots(figsize=(7, 4))
-    bins = np.logspace(-2, np.log10(max(df.gap_days.max(), 10)), 30)
+    bins = np.logspace(-2, np.log10(max(ends.gap_days.max(), 10)), 30)
     for fate, colour in zip(GROUPS.values(), ["tab:red", "tab:grey"]):
-        g = df[(df.fate == fate) & (df.state == "lost drogue")].gap_days
+        g = ends[(ends.fate == fate) & (ends.state == "lost drogue")].gap_days
         ax.hist(np.maximum(g, bins[0]), bins=bins, density=True, histtype="step", lw=2, color=colour,
                 label=f"{fate} (n = {len(g)})")
     ax.axvline(1, color="k", ls=":", lw=1)
-    ax.axvline(TAU_DAYS, color="k", ls="--", lw=1, label=f"τ = {TAU_DAYS:g} d")
+    ax.axvline(tau, color="k", ls="--", lw=1, label=f"τ = {tau:g} d")
     ax.set_xscale("log")
     ax.set_xlabel("Time from drogue loss to end of record (days)")
     ax.set_ylabel("Density")
     ax.set_title("Drifters whose record ends in R: when was the drogue lost?")
     ax.legend(frameon=False)
     fig.tight_layout()
-    out_fig = f"figures/{region_prefix(args.data)}_drogue_loss_{TAG}.png"
-    fig.savefig(out_fig, dpi=150)
+    save_figure(path, trim=False)
 
-    # ── 5. Summary ───────────────────────────────────────────────────────────
+
+def print_summary(table, ends, moves, n_grounded, tau):
     pd.set_option("display.width", 200)
     print(f"Drifters whose record ends in R ({n_grounded} ran aground with the subset's end matched):")
     print(table.to_string(index=False, float_format=lambda x: f"{x:.2f}"))
-    late = df[(df.fate == "ran aground") & (df.state == "lost drogue") & (df.gap_days <= 1)]
+    late = ends[(ends.fate == "ran aground") & (ends.state == "lost drogue") & (ends.gap_days <= 1)]
     print(f"\nGrounded drifters that lost the drogue ≤ 1 d before grounding: {len(late)}, "
           f"median {late.km_loss_to_end.median():.0f} km from the grounding point")
-    print(f"\nStranding moves (τ = {TAU_DAYS:g} d) by drogue type and rule:")
+    print(f"\nStranding moves (τ = {tau:g} d) by drogue type and rule:")
     print(moves.to_string(index=False))
+
+
+def main(argv=None):
+    args = parse_args(__doc__, lag=True, argv=argv)
+    tag = lag_tag(args.tau, args.box)
+    out_cells = f"data/drogue_loss_{tag}.csv"
+    out_sum = f"data/drogue_loss_summary_{tag}.csv"
+    out_moves = f"data/drogue_loss_stranding_moves_{tag}.csv"
+    out_fig = f"figures/{region_prefix(args.data)}_drogue_loss_{tag}.png"
+
+    drifters = Drifters(args.data)
+    in_R = in_box(drifters.lon, drifters.lat, args.box)
+    ends = record_ends(drifters, in_R)
+    table = pd.DataFrame([summarise(ends, fate, args.tau) for fate in GROUPS.values()])
+
+    strand_t = drifters.strand_times(in_R)
+    moves = stranding_moves(drifters, in_R, strand_t, args.tau)
+    n_grounded = int((strand_t[np.cumsum(drifters.ds["rowsize"].values) - 1] >= 0).sum())
+
+    ends.to_csv(out_cells, index=False)
+    table.to_csv(out_sum, index=False)
+    moves.to_csv(out_moves, index=False)
+    plot_gaps(ends, args.tau, out_fig)
+    print_summary(table, ends, moves, n_grounded, args.tau)
     print(f"\nSaved → {out_cells}, {out_sum}, {out_moves}, {out_fig}")
 
 
