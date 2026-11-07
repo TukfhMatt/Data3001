@@ -68,7 +68,14 @@ On the first run, Cartopy may need an internet connection to download the Natura
 agulhas/
   pipeline.py      the steps in run order, and the `python -m agulhas` command
   config.py        default region, grids and lag, command-line options, file names
+  drifters.py      the drifter subset, loaded array by array
+  grid.py          grid cells of a box and the cell of any position
+  moves.py         one-step moves on a grid and lag: what every matrix build starts from
   transport.py     load, step and analyse saved matrices; the helpers every matrix build shares
+  plotting.py      headless figures, maps with or without cartopy, saving at 150 dpi
+  shipping.py      the shipping density raster, read for one box from the zip
+  stats.py         distances and bootstrap intervals
+  opendrift_common.py  what the OpenDrift comparison steps share
   sources/         download the drifter subset and the ERA5 winds
   exploration/     look at the data and set the choices the matrices rest on
   operators/       build the transition matrices: drogued, undrogued, oil, seasonal
@@ -77,15 +84,26 @@ agulhas/
   coast/           stranding and exposure by coast, and the release-risk atlas
   validation/      how far the matrices can be trusted
   tools/           the worked example and the oil explorer; these only read the outputs
-tests/             tests of the shared helpers and the command; they need no data
+  comparison/      the oil matrix against OpenDrift, in its own environment
+tests/             tests of the shared modules, the command and the layout rules; they need no data
+docs/              architecture, pipeline map, data dictionary
 ```
 
 Each step is one module with a `main()`, named as its step: `python -m agulhas bootstrap` runs `agulhas/validation/bootstrap.py`.
 
+| Document | What it covers |
+|---|---|
+| [docs/architecture.md](docs/architecture.md) | How the package is organised, the shared modules, and the shape every step follows |
+| [docs/pipeline.md](docs/pipeline.md) | Every step in run order, with what it reads and writes |
+| [docs/data.md](docs/data.md) | The inputs, the matrix files and the files steps pass to each other |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, checks before committing, adding a step, changing code without changing results |
+| [Research.md](Research.md) | The research plan and the results step by step |
+
 ## Testing
 
 ```bash
-pip install pytest
+pip install -r requirements-dev.txt
+python -m pyflakes agulhas tests
 python -m pytest
 ```
 
@@ -99,7 +117,7 @@ python -m agulhas list                         # print the steps
 python -m agulhas all --from coastal_stranding  # resume at a step
 ```
 
-Downloads run only when their file is missing: `fetch_gdp_subset` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `fetch_era5` (ERA5 winds, which need `~/.cdsapirc`, a CDS account and the ERA5 licence, and take many hours). Run these commands from the repository root; outputs go to `data/` and `figures/` there. Any single step can also be run by name, e.g. `python -m agulhas exit_zones`. The table of steps below says what each one does and needs.
+Downloads run only when their file is missing: `fetch_gdp_subset` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `fetch_era5` (ERA5 winds, which need `~/.cdsapirc`, a CDS account and the ERA5 licence, and take many hours). Run these commands from the repository root; outputs go to `data/` and `figures/` there. Any single step can also be run by name, e.g. `python -m agulhas exit_zones`. [docs/pipeline.md](docs/pipeline.md) says what each one does, reads and writes.
 
 Most steps take the region, grid and lag as options; add `--help` after a step's name to see which (defaults in `agulhas/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
 
@@ -130,45 +148,6 @@ python -m agulhas all --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc
 ```
 
 `python -m agulhas all --box -80 -40 25 45 --data data/gulfstream_gdp1h_subset.nc` runs the steps that apply, which are those not marked Agulhas-only in `python -m agulhas list`. `shipping_overlay` picks release points by traffic alone outside R, since its named ports are all in R. `box_selection` searches around the Agulhas core only, and `coastal_stranding`, `traffic_exposure`, `risk_atlas` and `known_features` stop with a message outside the Agulhas area, because the named coasts, the routes and the expected features describe that region. `fetch_era5` and `oil_wind` keep separate wind files for each subset, and need ERA5 for the extra years and area. Output names carry the box, and figure names start with the first word of the subset's file name (here `gulfstream_`).
-
-| Step | What it does | Output |
-|---|---|---|
-| `fetch_gdp_subset` | Streams GDP hourly data chunk by chunk, keeps 5°W–65°E, 60–5°S (any candidate box plus a margin) at hourly resolution, drops positions with gaps > 6 h, and keeps each drifter's GDP fate (`typedeath`, `end_date`); a chunk that keeps failing to read stops the run rather than dropping its drifters; `--fetch-box` and `--out` save another region to its own file; `--metadata-only` refreshes those fields on an existing subset | `data/agulhas_gdp1h_subset.nc` |
-| `gdp_exploration` | Observation and drifter counts in R, drogued vs undrogued, coverage map, observations per year | `figures/agulhas_gdp_coverage_{box}.png`, `figures/agulhas_gdp_temporal_{box}.png` |
-| `grid_coverage` | Distinct drifters per cell at each grid size (default 0.5°, 1°, 2°), used to choose the grid | `figures/agulhas_grid_coverage_{grids}deg_{box}.png`, `data/grid_coverage_{grids}deg_{box}.npz` |
-| `transition_matrix` | Builds transition matrices for drogued and undrogued drifters at every grid and lag given (default 0.5°, 1°, 2°; τ = 3.5 days), with exit states for each edge and a stranded state from drifters that ran aground in R, then runs a test release | `data/P_{drogued,undrogued}_{res}deg_{tau}d_{box}.npz`, e.g. `data/P_drogued_1deg_3p5d_10E-55E_45S-15S.npz` |
-| `shipping_overlay` | Overlays commercial shipping density (World Bank / IMF AIS, 2015–2021) on the mean current from each drogue type, picks candidate release points (busiest lanes + known hotspots) in cells reliable in both matrices, and ranks them by near-shore exposure under the drogued and the undrogued matrix. Needs the shipping zip, which `python -m agulhas all` downloads. | `figures/agulhas_shipping_currents_{drogued,undrogued}_{tag}.png`, `data/release_candidates_{tag}.csv`, `data/shipping_{tag}.npz` |
-| `box_selection` | Scores every candidate bounding box containing the Agulhas core on undrogued data volume, reliable-cell share, shipping density and oil retention; reports the Pareto set, a recommended box and a side-by-side of named options | `figures/agulhas_box_selection.png`, `data/box_pareto.csv`, `data/box_options.csv` |
-| `bootstrap` | Resamples whole drifters 1,000 times per drogue type, rebuilds the matrix each time and re-propagates the release points from `shipping_overlay`: 95% intervals on each point's fate (still in R, exits, stranded, 30-day coastal exposure), whether drogued and undrogued differ, and how stable each row is (median bootstrap TVD) | `data/bootstrap_release_*.csv`, `data/bootstrap_difference_*.csv`, `data/bootstrap_rows_*.npz`, `figures/agulhas_bootstrap_fates_*.png`, `figures/agulhas_bootstrap_rows_*.png` |
-| `wind_slip` | Undrogued − drogued mean velocity per cell (the extra surface wind drift undrogued drifters carry), latitude-band means with 95% intervals from resampling whole drifters | `figures/agulhas_wind_slip_{res}deg_{box}.png`, `data/wind_slip_cells_…csv`, `data/wind_slip_bands_…csv` |
-| `fetch_era5` | Requests ERA5 10 m winds from the Copernicus CDS API one year at a time, interpolates them to every drifter position and deletes the raw year; needs a CDS account, the ERA5 licence and `~/.cdsapirc` | `data/drifter_wind10m.nc` (another subset gets its own file and year folder, `config.wind_paths`) |
-| `oil_wind` | Oil matrix: undrogued transitions moved by the windage they lack (3.5% minus their measured windage) × the ERA5 wind along each 3.5-day path; a drogued + 3.5% check matrix, and both again at 3% and 4%; checks of the measured windage without fast-current cells and east of 35°E; comparison at the release points, with drifter-bootstrap intervals, the number of grounded drifters behind each stranding share and a flag where oil and its check disagree | `data/P_oil_…npz`, `data/P_oil_check_…npz`, `data/P_oil_{3,4}pct_…npz`, `data/P_oil_check_{3,4}pct_…npz`, `data/oil_moves_…npz`, `data/oil_compare_…csv`, `figures/agulhas_oil_durban_30d_…png` |
-| `held_out` | Held-out validation, 5-fold by drifter: position error against persistence and mean-current advection, log score against climatology, exit and stranding calibration | `data/validation_summary_…csv`, `figures/agulhas_validation_…png` |
-| `whole_box_analysis` | Row support for every grid, lag and drogue type: active and empty cells, moves per row, distinct drifters per row and the share of reliable rows | `data/whole_box_support_{tag}.csv`, `figures/agulhas_whole_box_support_{tag}.png` |
-| `coastal_coverage` | The same for coastal cells (a land neighbour on the grid, as in `shipping_overlay`, `bootstrap` and `oil_wind`), against offshore cells | `data/coastal_support_{tag}.csv`, `figures/agulhas_coastal_support_{tag}.png` |
-| `trap_stability` | Scores each reliable cell by the share still afloat in R after 365 days; the top 10% are retention hotspots. Compares hotspots across grids where both grids are reliable, and bootstraps whole drifters on the 1° grid for 95% intervals and how often each cell is a hotspot | `data/retention_hotspots_{tag}.csv`, `data/retention_hotspot_agreement_{tag}.csv`, `data/retention_cells_{tag}.csv`, `data/retention_bootstrap_{tag}.csv`, `figures/agulhas_retention_hotspots_{tag}.png` |
-| `residence_time` | Expected time afloat in R from each cell, exactly from the absorbing chain (`transport.absorption`), for every grid, lag and drogue type | `data/residence_time_{tag}.csv`, `data/residence_time_cells_{tag}.csv`, `figures/agulhas_residence_time_{tag}.png` |
-| `exit_zones` | Eventual fate from each cell (left across W, E, S or N, or stranded), exactly from the absorbing chain, plus the fate after one year; mean fates and the most likely fate per cell | `data/exit_zones_{tag}.csv`, `data/exit_zones_cells_{tag}.csv`, `figures/agulhas_exit_zones_{tag}.png` |
-| `almost_invariant_regions` | Four regions per drogue type that keep material to themselves, from spectral clustering of reliable cells; checked with the directional P (share staying after one step, 30 and 365 days) against longitude bands of the same sizes | `data/almost_invariant_regions_…csv`, `data/almost_invariant_cells_…csv`, `figures/agulhas_almost_invariant_…png` |
-| `release_point_maps` | Maps of where material from each release point from `shipping_overlay` is after 7, 30 and 365 days under both matrices, with the share afloat in R, each exit and stranded, and 95% intervals from `bootstrap` | `data/release_point_maps_…csv`, `figures/agulhas_release_{nn}_{point}_….png` |
-| `sensitivity` | Compares the reference (1°, τ = 3.5 d) with τ = 2 and 5 days and with 0.5° and 2° grids: held-out skill from `held_out` at common horizons, and the release points' one-year fates against the reference's bootstrap interval from `bootstrap` | `data/sensitivity_skill_{box}.csv`, `data/sensitivity_fates_{box}.csv`, `figures/agulhas_sensitivity_{box}.png` |
-| `seasonal_matrices` | Builds separate DJF, MAM, JJA and SON transition matrices for both drogue types, assigning each move to the season of its start observation. Reports seasonal row support, TVD against the annual operator, pairwise seasonal TVD on common reliable cells, a permutation test of that TVD (season labels shuffled between blocks of one drifter's moves in one season of one year), and 30-day release-point sensitivity. The 2° run is used as a robustness check where 1° drogued seasonal support is sparse. | `data/P_{drogued,undrogued}_{DJF,MAM,JJA,SON}_…npz`, `data/seasonal_support_…csv`, `data/seasonal_tvd_cells_…csv`, `data/seasonal_pairwise_tvd_…csv`, `data/seasonal_permutation_…csv`, `data/seasonal_release_30d_…csv`, `figures/agulhas_seasonal_summary_…png` |
-| `chapman_kolmogorov` | Chapman–Kolmogorov consistency check: compares two applications of the τ operator, `P(τ)^2`, with an operator estimated directly from drifter pairs at `2τ`. Reports row-wise TVD over cells reliable at both lags, descriptive shares below TVD 0.25 and 0.50, and differences in in-region and absorbing-state probabilities. Resamples whole drifters 1,000 times to give each direct `2τ` row's sampling noise, and reports the share of rows whose TVD exceeds the 95th percentile of that noise. For the baseline τ = 3.5 d, the direct 7-day matrices from `transition_matrix` are required. | `data/chapman_kolmogorov_summary_{tag}.csv`, `data/chapman_kolmogorov_cells_{tag}.csv`, `figures/agulhas_chapman_kolmogorov_{tag}.png`, `figures/agulhas_chapman_kolmogorov_noise_{tag}.png` |
-| `coastal_pooling` | Pools neighbouring thin coastal cells into short contiguous segments without modifying the main transition matrix. For this step only, the existing coastal-cell candidates are conservatively filtered using Natural Earth 50m land polygons: mapped land must intersect the candidate cell or one of its eight neighbouring cells. At the baseline setting (1°, τ = 3.5 days), this removes four offshore candidates, leaving 99 coastal cells grouped into 44 segments. Each segment contains at most four neighbouring cells and is evaluated using distinct-drifter support. Segments below the reliability threshold are retained and flagged. The filter does not add potentially missing coastal cells. Scripts `shipping_overlay`, `bootstrap`, `oil_wind` and `coastal_coverage` retain the original coastal-cell definition. The pooled segments support coastal summaries and future traffic-weighted coastal-risk analysis. | `data/coastal_pooling_cells_{tag}.csv`, `data/coastal_pooling_segments_{tag}.csv`, `data/coastal_pooling_summary_{tag}.csv`, `data/coastal_segments_{tag}.npz`, `figures/agulhas_coastal_pooling_{tag}.png` |
-| `drogue_loss` | For drifters whose record ends in R, the time from drogue loss to the end of the record, for drifters that ran aground against drifters that stopped transmitting; counts each drogue type's stranding moves when a stranding move takes the drogue status of its start (the rule every matrix build uses, `transport.same_drogue`) and when both ends must match | `data/drogue_loss_{tau}d_{box}.csv`, `data/drogue_loss_summary_…csv`, `data/drogue_loss_stranding_moves_…csv`, `figures/agulhas_drogue_loss_…png` |
-| `coastal_stranding` | Splits each operator's stranded state into six named coasts by where drifters ran aground, checks that the split reproduces the saved operator, and reports stranding on each coast (eventually and within 7, 30 and 365 days) and expected days to strand, for every cell and the release points from `shipping_overlay`, with 1,000 resamples of whole drifters | `data/P_{drogued,undrogued,oil,oil_check}_coast_…npz`, `data/coastal_stranding_points_…csv`, `data/coastal_stranding_cells_…csv`, `data/coastal_stranding_support_…csv`, `data/coast_counts_…npz`, `figures/agulhas_coastal_stranding_…png` |
-| `traffic_exposure` | Spreads releases over R by shipping density, for all traffic and six routes: stranding by coast, days to strand, near-shore days, each route's share of each coast's stranding and oil's mass stranded, with 1,000 resamples of whole drifters; sensitivity runs with lane-pixel weights and without the weight moved off unreliable cells. Needs the shipping zip. | `data/traffic_exposure_…csv`, `data/traffic_nearshore_segments_…csv`, `data/traffic_weights_…csv`, `data/traffic_releases_…npz`, `figures/agulhas_traffic_exposure_…png` |
-| `risk_atlas` | Release-risk atlas, for drogued, undrogued and oil at 3%, 3.5% and 4% of the wind: for every ocean cell, the share afloat in R, exited across each edge and stranded on each coast at 7, 30 and 365 days and eventually, and days to strand, with 95% intervals and each cell's reliability flags | `data/risk_atlas_…csv`, `figures/agulhas_risk_atlas_…png` |
-| `hypothesis_tests` | Applies the proposal's decision rules: the interval of P(exit E) − P(exit W) over reliable cells (H1), undrogued against drogued stranding in the lane cells (H2) and folds won against persistence and advection from 14 days (H3), with 1,000 resamples of whole drifters | `data/hypothesis_h{1,2,3}_…csv`, `figures/agulhas_hypothesis_tests_…png` |
-| `decorrelation_time` | Velocity autocorrelation and integral timescale per drogue type (over 10–40°E, 45–25°S in R), with 1,000 resamples of whole drifters | `data/decorrelation_{res}deg_{box}.csv`, `data/decorrelation_curve_…csv`, `figures/agulhas_decorrelation_…png` |
-| `oil_windage` | Oil at 3%, 3.5% and 4% of the wind against undrogued material, for all traffic, each route and each release point: stranding by coast, days to strand, oil mass stranded and exits; the interval of the 4% − 3% difference on the same drifter resamples; method flags at each windage | `data/oil_windage_…csv`, `data/oil_windage_difference_…csv`, `data/oil_windage_method_flags_…csv`, `figures/agulhas_oil_windage_…png` |
-| `spill_hindcasts` | Sets the oil matrix against two recorded spills under a fixed decision rule: stranding within 30 days, the coast that receives most, and the direction of drift, at the spill cell and the nearest reliable cell, with 1,000 resamples of whole drifters | `data/spill_hindcasts_…csv`, `data/spill_hindcast_verdicts_…csv`, `figures/agulhas_spill_hindcasts_…png` |
-| `source_sink` | Which cells gather or shed material over one step: the column sums of P, with 1,000 resamples of whole drifters; cells on the edge of R are not judged, since inflow from outside is not in the matrix | `data/source_sink_…csv`, `figures/agulhas_source_sink_…png` |
-| `held_out_year` | Held-out fates out to 364 days, in the folds of `held_out`: still in R, each exit and stranded, predicted against Aalen–Johansen estimates that allow for records ending early, with intervals from resampling whole drifters, Brier skill, calibration, and results by start longitude and release cell | `data/validation_year_summary_…csv`, `data/validation_year_support_…csv`, `data/validation_year_calibration_…csv`, `data/validation_year_bands_…csv`, `data/validation_year_points_…csv`, `figures/agulhas_validation_year_…png` |
-| `known_features` | Sets the mean current and the matrices against the known circulation under fixed rules: current speed and path, drift from Durban, retroflection, fate divide, Return Current latitude, Cape Basin flow and leakage share, with 1,000 resamples of whole drifters | `data/known_features_…csv`, `figures/agulhas_known_features_…png` |
-| `config.py` | Default region, grids, lag and data path; command-line options; matrix file names | — |
-| `transport.py` | Helpers to load and use a saved matrix (release, propagation, cell centres, reliable cells, exact residence time and fate from the absorbing chain), plus the pairing, counting and drifter-bootstrap helpers shared by every script that builds a matrix | — |
-
 
 ---
 ## Whole-box results
@@ -272,16 +251,7 @@ n_cells = len(op["cell_flat"])
 print("still in R:", p[:n_cells].sum(), "exited / stranded:", dict(zip(op["exit_labels"], p[n_cells:])))
 ```
 
-Other fields in each file:
-
-| Field | Meaning |
-|---|---|
-| `C` | Raw transition counts behind `P` |
-| `row_drifters`, `row_obs` | Distinct drifters and transitions behind each row |
-| `flagged` | Rows built from fewer than 10 drifters (less reliable) |
-| `empty` | Cells with no outgoing moves of their own; their rows pool the moves of the nearest ring of ocean cells |
-| `lon_edges`, `lat_edges`, `res` | Grid definition |
-| `box`, `tau_days`, `drogued`, `years`, `source` | Metadata |
+Every field of the file, and the oil, seasonal and coast variants, are in [docs/data.md](docs/data.md).
 
 The coast operators from `coastal_stranding` (`data/P_{name}_coast_…npz`) are the same matrices with `stranded` split into six named coasts (`transport.COAST_LABELS`), so they have five more absorbing states; read them through `exit_labels`.
 
