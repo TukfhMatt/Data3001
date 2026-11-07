@@ -54,6 +54,18 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
+### Or with Docker
+
+Docker gives the same environment without installing Python or any libraries. The image holds the code and its pinned dependencies only: `data/` and `figures/` are mounted from the repository, so downloads and outputs stay on disk between runs. Build and run it for x86-64 (`linux/amd64`), where every pinned package has a prebuilt wheel; on Apple silicon Docker emulates x86-64, which is slower but gives the same matrices.
+
+```bash
+docker build --platform linux/amd64 -t agulhas .
+docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas                                  # python -m agulhas all
+docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas python -m agulhas exit_zones  # one step
+docker run --rm --platform linux/amd64 agulhas python -m pytest
+```
+
+`fetch_era5` needs CDS credentials when `data/drifter_wind10m.nc` is missing: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run (`python -m agulhas all`, starting from an empty `data/` apart from `drifter_wind10m.nc`) takes about 3 hours under emulation on an Apple-silicon laptop, within Docker Desktop's 8 GB memory limit; the drifter and shipping downloads take about 10 minutes of that. Its tables match a native run to floating-point rounding, which shows only in near-zero bootstrap bounds.
 
 `cartopy` is optional for most plots, which can fall back to plain matplotlib without coastlines. However, `coastal_pooling` requires both `cartopy` and `shapely` to apply its Natural Earth 50m geographic filter.
 

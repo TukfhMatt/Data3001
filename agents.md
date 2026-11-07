@@ -9,6 +9,7 @@ A university data science project (Data3001) that builds a surface-transport ope
 ## Environment
 
 - Use the project virtual environment: `.venv/bin/python` (Python 3.9).
+- `Dockerfile` builds the same environment for `linux/amd64`, where every pin in `requirements.txt` has a wheel (`cartopy`, `numcodecs` and `rasterio` have none for Linux arm64). The image holds code only; `data/` and `figures/` are mounted at run time. A new dependency needs an amd64 wheel or its system library added to the Dockerfile, as `rasterio` needs `libexpat1` on the slim image. Check with `docker run --rm --platform linux/amd64 agulhas python -m pytest`, which imports every step.
 - `python -m agulhas all` runs every step in order (`--from`, and `--box` with `--data` for another region); `python -m agulhas list` prints the steps and `python -m agulhas <step>` runs one. Run these **from the repository root**; steps use relative paths (`data/...`, `figures/...`), and import `agulhas.config` and `agulhas.transport`. `python -m pytest` runs the tests, which need no data.
 - The Python is built against LibreSSL, so urllib3 prints a `NotOpenSSLWarning`; it is harmless. Pass `-W ignore` for cleaner output.
 - The OpenDrift comparison (`agulhas/comparison/`) runs in its own environment, `.venv-opendrift` from `requirements-opendrift.txt`, because OpenDrift needs Python 3.10 or newer. Those steps are in `TOOLS`, not in a full run. Its forcing and results stay in `data/opendrift/`.
