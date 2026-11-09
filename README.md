@@ -139,6 +139,8 @@ python -m agulhas transition_matrix --box 10 55 -41 -15 --res 1 --tau 2 3.5 5   
 python -m agulhas shipping_overlay --res 1 --tau 3.5                           # needs that matrix from transition_matrix
 python -m agulhas seasonal_matrices --res 1 --tau 3.5
 python -m agulhas seasonal_matrices --res 2 --tau 3.5                         # coarser seasonal robustness check
+python -m agulhas calendar_forecast --res 1 --tau 3.5                         # one-year fates by release month; needs seasonal_matrices and bootstrap at the same setting
+python -m agulhas calendar_forecast --res 2 --tau 3.5                         # the same at 2° (also needs bootstrap --res 2)
 python -m agulhas transition_matrix --res 1 --tau 7                           # direct 2τ matrix needed by chapman_kolmogorov
 python -m agulhas chapman_kolmogorov --res 1 --tau 3.5                        # P(τ)^2 vs direct P(2τ)
 python -m agulhas coastal_pooling --res 1 --tau 3.5                           # needs the annual matrices from transition_matrix
@@ -283,6 +285,7 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Held-out validation to one year: fates across R agree within 3.7 points at day 364 (undrogued from 105 drifters, drogued from only 14). Undrogued exits east are under-predicted by up to 4.4 points, the highest undrogued retention is overstated by about 10 points, and single release points cannot be tested at a year
 - [x] Sensitivity to τ and grid size: τ = 2–5 days gives the same results; 1° is used (0.5° adds no skill and has 50% thin drogued rows, 2° loses short-range skill and shifts one-year fates)
 - [x] Seasonal matrices, with a permutation test: no drogued seasonality beyond sampling noise, a small but real undrogued one
+- [x] Calendar-ordered seasonal forecast: for a release in each month, every step uses its season's matrix; one-year fates differ from the annual matrix by a median of 0.2 / 0.4 points (drogued / undrogued) at 1° and 0.4 / 0.7 at 2°, with 1.0% / 5.3% and 1.6% / 8.5% of estimates outside the annual 95% interval. Drogued seasonal rows are mostly replaced by the annual row (49–88%), so only the undrogued result is informative
 - [x] Chapman–Kolmogorov check: `P(3.5 d)^2` against direct 7-day transitions; median row TVD 0.243 / 0.173 for drogued / undrogued, almost all sampling noise (1.8% / 3.7% of rows above their 95% noise level)
 - [x] Coastal pooling: Natural Earth 50m conservative geographic filter reduces 103 candidates to 99 coastal cells, grouped into 44 short segments; 29 segments are reliable for both drogue types, while 15 remain thin and flagged
 - [x] ERA5 winds at every drifter position; oil matrix = undrogued + the missing 1.5% windage (undrogued carries 2.0%), with a drogued + 3.5% check
