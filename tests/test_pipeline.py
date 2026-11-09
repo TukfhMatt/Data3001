@@ -43,6 +43,10 @@ def test_every_module_is_a_step():
     ("traffic_exposure", "oil_windage"),
     ("coastal_stranding", "risk_atlas"),
     ("seasonal_matrices", "spill_hindcasts"),
+    ("seasonal_matrices", "calendar_forecast"),
+    ("bootstrap", "calendar_forecast"),
+    ("seasonal_matrices_res2", "calendar_forecast_res2"),
+    ("bootstrap_res2", "calendar_forecast_res2"),
 ])
 def test_steps_run_after_what_they_read(before, after):
     assert order(before) < order(after)
