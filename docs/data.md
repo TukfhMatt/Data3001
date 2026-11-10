@@ -51,7 +51,7 @@ Names and their extra fields:
 | `name` | What it is | Extra fields |
 |---|---|---|
 | `drogued`, `undrogued` | From `transition_matrix` | — |
-| `oil`, `oil_3pct`, `oil_4pct` | Undrogued moves shifted by the windage they lack, for oil at 3.5%, 3% and 4% of the wind (`oil_wind`) | `alpha_added`, `alpha_undrogued`, `alpha_oil`, `decay_days` |
+| `oil`, `oil_3pct`, `oil_4pct` | Undrogued moves shifted by the windage they lack, for oil at 3.5%, 3% and 4% of the wind (`oil_wind`) | `alpha_added`, `alpha_undrogued`, `alpha_oil` |
 | `oil_check`, `oil_check_3pct`, `oil_check_4pct` | Drogued moves shifted by the full oil windage, a check of the method | as above |
 | `{type}_{DJF,MAM,JJA,SON}` | Moves starting in one season (`seasonal_matrices`) | `season`, `season_name`, `season_months`, `season_rule` |
 | `{name}_coast` | The same matrix with `stranded` split into six named coasts (`coastal_stranding`, `transport.COAST_LABELS`), so `n_cells + 10` states | `coast_names` |
@@ -80,5 +80,8 @@ print("in R:", p[:n].sum(), dict(zip(op["exit_labels"], p[n:])))
 | `traffic_releases_{tag}.npz` | `traffic_exposure` | `W`: release weights over ocean states, all traffic then each route (rows sum to 1); `route_share`; `releases` |
 | `risk_atlas_{tag}.csv` | `risk_atlas` | Per matrix, release state, horizon and outcome: `estimate`, `lo`, `hi`, with the cell's `reliable`, `flagged`, `empty` and `row_drifters` |
 | `opendrift/points/{yyyymm}.npz` | `opendrift_points` | `counts`: particles per (release point, horizon, state), with horizons day 7 and 31.5 and states as in the oil coast matrix, then one for a position it has no state for (`opendrift_common.classify`) |
+| `opendrift/moves/{yyyymm}.npz` | `opendrift_moves` | `moves`: moves over τ from each ocean cell (rows) to each state of the oil coast matrix (columns), counted from every hour; `particles`: distinct particles behind each row |
+| `opendrift/drifters/starts_{tag}.npz` | `opendrift_drifters` | Per test start, sorted by time: `fold`, `traj`, `t0`, the true `state` and `pos` at each whole step (as `held_out.test_samples`), and the fold matrix's `matrix_com` (given in R), `matrix_in_R`, `matrix_exit`, `matrix_strand` at each scored step; `n_cells`, `tau`, `steps` |
+| `opendrift/drifters/{yyyymm}_{half}.npz` | `opendrift_drifters` | Per start in the half month (`index` into the starts file), from the exact and the cell seeding: `com` (given in R), `in_R`, `exit`, `strand` at each scored step; `on_land` per particle |
 
 The other CSVs are result tables; their columns are named in full (`median_tvd`, `ci_low`, `reliable_both`, …) and each step's docstring says what it reports.

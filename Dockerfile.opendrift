@@ -1,0 +1,22 @@
+# Agulhas OpenDrift comparison. OpenDrift needs Python 3.10 or newer, so it has its own image.
+# Build and run for x86-64, where every pinned package has a wheel:
+#   docker build --platform linux/amd64 -f Dockerfile.opendrift -t agulhas-opendrift .
+#   docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" \
+#       agulhas-opendrift python -m agulhas opendrift_compare
+# opendrift_forcing also needs ~/.copernicusmarine-credentials and ~/.cdsapirc mounted under /root.
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    MPLBACKEND=Agg
+
+WORKDIR /app
+
+COPY requirements-opendrift.txt ./
+RUN pip install --no-cache-dir -r requirements-opendrift.txt pytest
+
+COPY pyproject.toml ./
+COPY agulhas/ agulhas/
+COPY tests/ tests/
+COPY docs/ docs/
+
+CMD ["python", "-m", "pytest", "tests/test_opendrift.py"]

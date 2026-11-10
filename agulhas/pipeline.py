@@ -84,6 +84,11 @@ TOOLS = [
     Step("opendrift_points", "comparison.opendrift_points"),
     Step("opendrift_treasure", "comparison.opendrift_treasure"),
     Step("opendrift_compare", "comparison.opendrift_compare"),
+    Step("opendrift_moves", "comparison.opendrift_moves"),
+    Step("opendrift_checks", "comparison.opendrift_checks"),
+    Step("opendrift_drifters", "comparison.opendrift_drifters"),
+    Step("opendrift_score", "comparison.opendrift_score"),
+    Step("opendrift_coverage", "comparison.opendrift_coverage"),
 ]
 NEEDS_SHIPPING = {"shipping_overlay", "box_selection"}
 

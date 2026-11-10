@@ -18,5 +18,6 @@ RUN pip install --no-cache-dir -r requirements.txt pytest
 COPY pyproject.toml ./
 COPY agulhas/ agulhas/
 COPY tests/ tests/
+COPY docs/ docs/
 
 CMD ["python", "-m", "agulhas", "all"]

@@ -34,7 +34,7 @@ Steps hold only what is particular to them. Everything two steps would otherwise
 | `plotting.py` | The headless backend, cartopy with a plain-matplotlib fallback (`MAP_KW`, `TRANSFORM_KW`), `map_axes`, `add_gridlines`, `save_figure` (150 dpi) and the drogue-type colours. |
 | `shipping.py` | The shipping density raster: `read_window` reads one box straight from the zip, `blocks` groups its pixels into grid cells. |
 | `stats.py` | `haversine_km` and `interval` (the 95% interval of resampled values). |
-| `opendrift_common.py` | What the OpenDrift comparison steps share: their settings, one `OceanDrift` run (`simulate`), and `classify`, which sorts particles into the matrix's states. OpenDrift is imported only inside `simulate`, so the rest also works in the main environment. |
+| `opendrift_common.py` | What the OpenDrift comparison steps share: their settings, one `OceanDrift` run (`simulate`), and `classify` and `hourly_states`, which sort particles into the matrix's states at one hour or at every hour. OpenDrift is imported only inside `simulate`, so the rest also works in the main environment. |
 | `pipeline.py` | The step list and the `python -m agulhas` command (`all`, `list`, one step by name). |
 
 A step that builds or resamples a matrix starts from `MoveSet`, so every matrix in the project is built by the same code as `transition_matrix`; `counts_for` stops a step whose rebuilt counts differ from the saved matrix.

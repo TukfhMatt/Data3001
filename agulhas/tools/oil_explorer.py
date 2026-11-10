@@ -4,7 +4,7 @@ Builds a single web page: click anywhere in R and watch where oil released there
 goes over a year, step by step, in the matrix's own τ steps. The page holds the
 oil matrix with its stranding split by coast (coastal_stranding), and does the
 matrix steps in the browser, so it needs no server. It offers two views: where the oil drifts
-(transport only, as in the atlas) and how much is left with exp(−t / 14 d).
+(transport only, as in the atlas) and how much is left for heavy fuel oil (config.oil_mass_left).
 
 It reports what a reader needs to judge the answer: the drifters behind the
 release cell, whether the cell is thin, the atlas's 95% intervals at 7 days, 30
@@ -22,7 +22,7 @@ import os
 import numpy as np
 import pandas as pd
 
-from agulhas.config import DISAGREE_TVD, MIN_DRIFTERS, operator_path, parse_args, release_points_path, setting_tag
+from agulhas.config import DISAGREE_TVD, MIN_DRIFTERS, OIL_MASS_CASES, operator_path, parse_args, release_points_path, setting_tag
 from agulhas.transport import COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, check_coast_box, load_operator, reliable
 
 HORIZONS = [7, 30, 365]
@@ -105,7 +105,8 @@ def page_data(op, args, tvd, atlas, points, land):
         "flagged": op["flagged"][:n_cells].astype(int).tolist(), "empty": op["empty"][:n_cells].astype(int).tolist(),
         "reliable": reliable(op)[:n_cells].astype(int).tolist(),
         "methodTvd": np.round(tvd, 3).tolist(), "disagreeTvd": DISAGREE_TVD, "minDrifters": MIN_DRIFTERS,
-        "decayDays": float(op["decay_days"]), "alphaOil": float(op["alpha_oil"]),
+        "massPersistent": OIL_MASS_CASES["heavy_fuel"]["persistent"], "massTau": OIL_MASS_CASES["heavy_fuel"]["tau_days"],
+        "alphaOil": float(op["alpha_oil"]),
         "alphaUndrogued": float(op["alpha_undrogued"]), "alphaAdded": float(op["alpha_added"]),
         "years": op["years"].astype(int).tolist(),
         "maxSteps": int(round(HORIZONS[-1] / args.tau)),

@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from agulhas.config import (BOX, box_tag, grid_shape, grid_tag, operator_path, parse_args, place_label,
@@ -44,3 +45,13 @@ def test_parse_args_reads_the_list_it_is_given(tmp_path):
 def test_parse_args_rejects_options_a_step_does_not_take(tmp_path):
     with pytest.raises(SystemExit):
         parse_args("Title", argv=["--res", "2", "--data", str(tmp_path / "none.nc")])
+
+
+def test_oil_mass_left_keeps_a_persistent_share_and_the_fast_case_decays_away():
+    from agulhas.config import oil_mass_left
+
+    assert oil_mass_left(0) == 1.0 and oil_mass_left(0, "fast_loss") == 1.0
+    assert abs(oil_mass_left(365) - 0.85) < 1e-12                      # heavy fuel oil keeps 85%
+    assert abs(oil_mass_left(14, "fast_loss") - np.exp(-1)) < 1e-12    # 14-day e-folding, no persistent share
+    assert oil_mass_left(365, "fast_loss") < 1e-10
+    assert (np.diff(oil_mass_left(np.arange(0, 400, 7))) <= 0).all()

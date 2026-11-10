@@ -41,9 +41,10 @@ def merged_wind(year, next_january=True):
     return out
 
 
-def simulate(start, lons, lats, markers, hours, seed, wind_file=None, release_hours=0):
+def simulate(start, lons, lats, markers, hours, seed, wind_file=None, release_hours=0, times=None, wind=OIL_WIND, max_age_hours=None, diffusivity=DIFFUSIVITY):
     """Run OceanDrift with hourly output. Returns hourly lon and lat (particles, hours + 1), empty before
-    a particle is released and after it stops, with each particle's marker, whether it stranded, and its last hour."""
+    a particle is released and after it stops, with each particle's marker, whether it stranded, and its last hour.
+    times gives each particle its own release time; max_age_hours stops each particle that long after its release."""
     from opendrift.models.oceandrift import OceanDrift
     from opendrift.readers import reader_netCDF_CF_generic
 
@@ -58,9 +59,11 @@ def simulate(start, lons, lats, markers, hours, seed, wind_file=None, release_ho
     m.set_config("drift:vertical_mixing", False)
     m.set_config("drift:current_uncertainty", 0)
     m.set_config("drift:wind_uncertainty", 0)
-    m.set_config("environment:constant:horizontal_diffusivity", DIFFUSIVITY)
-    when = [start, start + timedelta(hours=release_hours)] if release_hours else start
-    m.seed_elements(lon=lons, lat=lats, radius=0, number=len(lons), time=when, wind_drift_factor=OIL_WIND, origin_marker=markers)
+    m.set_config("environment:constant:horizontal_diffusivity", diffusivity)
+    if max_age_hours:
+        m.set_config("drift:max_age_seconds", max_age_hours * 3600)
+    when = list(times) if times is not None else [start, start + timedelta(hours=release_hours)] if release_hours else start
+    m.seed_elements(lon=lons, lat=lats, radius=0, number=len(lons), time=when, wind_drift_factor=wind, origin_marker=markers)
     m.run(duration=timedelta(hours=hours), time_step=3600, time_step_output=3600,
           export_variables=["lon", "lat", "status", "origin_marker"])
     r = m.result
@@ -99,3 +102,27 @@ def classify(lon, lat, stranded, last, hour, cell_state, n_cells, box, n_lon):
             flat = int(np.floor(y[-1] - lat0)) * n_lon + int(np.floor(x[-1] - lon0))
             state[i] = cell_state.get(flat, n_cells + 4 + N_COASTS)
     return state
+
+
+def hourly_states(lon, lat, stranded, last, cell_state, n_cells, box, n_lon):
+    """classify at every hour at once: (particles, hours) states, for counting moves."""
+    lon0, lon1, lat0, lat1 = box
+    n, t = lon.shape
+    none = n_cells + 4 + N_COASTS
+    hour, row = np.arange(t)[None, :], np.arange(n)
+    alive = hour <= last[:, None]
+    with np.errstate(invalid="ignore"):
+        out = alive & ((lon < lon0) | (lon >= lon1) | (lat < lat0) | (lat >= lat1))
+        flat = np.floor(lat - lat0) * n_lon + np.floor(lon - lon0)
+    lookup = np.full(max(cell_state) + 1, none)
+    lookup[list(cell_state)] = list(cell_state.values())
+    known = alive & ~out & np.isfinite(flat) & (flat >= 0) & (flat < len(lookup))
+    state = np.full((n, t), none)
+    state[known] = lookup[flat[known].astype(int)]
+    end_lon, end_lat = lon[row, last], lat[row, last]
+    coast = n_cells + 4 + coast_of(end_lon, end_lat)
+    state = np.where(stranded[:, None] & (hour >= last[:, None]), coast[:, None], state)
+    first = np.where(out.any(axis=1), np.argmax(out, axis=1), t)
+    x, y = lon[row, np.minimum(first, t - 1)], lat[row, np.minimum(first, t - 1)]
+    side = np.select([x < lon0, x >= lon1, y < lat0], [0, 1, 2], 3)
+    return np.where(hour >= first[:, None], (n_cells + side)[:, None], state)
