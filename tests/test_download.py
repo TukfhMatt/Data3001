@@ -1,12 +1,14 @@
-"""The published ERA5 winds: downloads keep only a file whose checksum matches, the
-published winds are used only for the subset they were built for, and oil_wind
-refuses winds built for another subset. No test touches the network."""
+"""Downloads and the published ERA5 winds: a dropped connection is retried from where
+it stopped, a file is kept only if its checksum matches, the published winds are used
+only for the subset they were built for, and oil_wind refuses winds built for another
+subset. No test touches the network."""
 
 import hashlib
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import requests
 import xarray as xr
 
 from agulhas import download as dl
@@ -15,14 +17,15 @@ from agulhas.drifters import Drifters
 from agulhas.operators.oil_wind import load_winds
 from agulhas.sources import fetch_era5
 
-CONTENT = b"winds" * 1000
+CONTENT = bytes(range(256)) * 20
+SUM = hashlib.sha256(CONTENT).hexdigest()
 
 
 class Response:
-    """A stand-in for requests' streamed response."""
+    """A stand-in for requests' streamed response, which can drop part way."""
 
-    def __init__(self, blocks):
-        self.blocks = blocks
+    def __init__(self, status_code, body, drop_after=None):
+        self.status_code, self.body, self.drop_after = status_code, body, drop_after
 
     def __enter__(self):
         return self
@@ -31,41 +34,90 @@ class Response:
         return False
 
     def raise_for_status(self):
-        pass
+        if self.status_code >= 400:
+            raise requests.HTTPError(self.status_code)
 
     def iter_content(self, chunk_size):
-        for block in self.blocks:
-            if isinstance(block, Exception):
-                raise block
-            yield block
+        for i in range(0, len(self.body), 500):
+            if self.drop_after is not None and i >= self.drop_after:
+                raise requests.exceptions.ChunkedEncodingError("Connection reset by peer")
+            yield self.body[i:i + 500]
 
 
-def serve(monkeypatch, blocks):
-    monkeypatch.setattr(dl.requests, "get", lambda url, stream, timeout: Response(blocks))
+class Server:
+    """Serves CONTENT, honouring byte ranges unless told not to, and drops the
+    connection after drop_after bytes on each of its first `drops` requests."""
+
+    def __init__(self, drops=0, drop_after=1500, ranges=True):
+        self.drops, self.drop_after, self.ranges, self.starts = drops, drop_after, ranges, []
+
+    def get(self, url, stream, timeout, headers=None):
+        start = int(headers["Range"][6:-1]) if headers else 0
+        self.starts.append(start)
+        drop = self.drop_after if len(self.starts) <= self.drops else None
+        if not self.ranges:
+            return Response(200, CONTENT, drop)
+        if start >= len(CONTENT):
+            return Response(416, b"")
+        return Response(206 if start else 200, CONTENT[start:], drop)
 
 
-def test_a_download_is_kept_when_its_checksum_matches(tmp_path, monkeypatch):
-    serve(monkeypatch, [CONTENT[:2000], CONTENT[2000:]])
+@pytest.fixture
+def server(monkeypatch):
+    """Install a fake server; retries do not wait."""
+    monkeypatch.setattr(dl.time, "sleep", lambda s: None)
+
+    def install(**kw):
+        s = Server(**kw)
+        monkeypatch.setattr(dl.requests, "get", s.get)
+        return s
+    return install
+
+
+def test_a_download_is_kept_when_its_checksum_matches(tmp_path, server):
+    server()
     path = str(tmp_path / "sub" / "wind.nc")
-    dl.download("https://example.org/wind.nc", path, hashlib.sha256(CONTENT).hexdigest())
+    dl.download("https://example.org/wind.nc", path, SUM)
     assert open(path, "rb").read() == CONTENT
-    assert dl.sha256(path) == hashlib.sha256(CONTENT).hexdigest()
+    assert dl.sha256(path) == SUM
 
 
-def test_a_download_with_the_wrong_checksum_is_not_kept(tmp_path, monkeypatch):
-    serve(monkeypatch, [CONTENT])
-    path = tmp_path / "wind.nc"
+def test_a_download_with_the_wrong_checksum_is_not_kept(tmp_path, server):
+    server()
     with pytest.raises(SystemExit):
-        dl.download("https://example.org/wind.nc", str(path), "0" * 64)
+        dl.download("https://example.org/wind.nc", str(tmp_path / "wind.nc"), "0" * 64)
     assert list(tmp_path.iterdir()) == []
 
 
-def test_an_interrupted_download_never_looks_finished(tmp_path, monkeypatch):
-    serve(monkeypatch, [CONTENT[:100], ConnectionError("dropped")])
+def test_a_dropped_connection_continues_from_where_it_stopped(tmp_path, server):
+    s = server(drops=2)
     path = tmp_path / "wind.nc"
-    with pytest.raises(ConnectionError):
+    dl.download("https://example.org/wind.nc", str(path), SUM)
+    assert path.read_bytes() == CONTENT
+    assert s.starts == [0, 1500, 3000]
+
+
+def test_a_server_that_ignores_ranges_sends_the_file_again(tmp_path, server):
+    server(drops=1, ranges=False)
+    path = tmp_path / "wind.nc"
+    dl.download("https://example.org/wind.nc", str(path), SUM)
+    assert path.read_bytes() == CONTENT
+
+
+def test_a_partial_file_from_an_earlier_run_is_continued(tmp_path, server):
+    s = server()
+    path = tmp_path / "wind.nc"
+    (tmp_path / "wind.nc.part").write_bytes(CONTENT[:2000])
+    dl.download("https://example.org/wind.nc", str(path), SUM)
+    assert path.read_bytes() == CONTENT and s.starts == [2000]
+
+
+def test_after_every_try_fails_the_run_stops_and_keeps_the_part(tmp_path, server):
+    server(drops=dl.MAX_TRIES, drop_after=0)
+    path = tmp_path / "wind.nc"
+    with pytest.raises(SystemExit, match="Run the same command again"):
         dl.download("https://example.org/wind.nc", str(path))
-    assert not path.exists()
+    assert not path.exists() and (tmp_path / "wind.nc.part").exists()
 
 
 def write_subset(path, lon):

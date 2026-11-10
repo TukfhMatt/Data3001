@@ -46,7 +46,7 @@ The box balances shipping risk against oil retention (scored in `box_selection`)
 
 ## Setup
 
-Python 3.9, with a virtual environment in `.venv/`:
+Python 3.9 to 3.12, with a virtual environment in `.venv/`. The results were built and checked on 3.9. The pinned `numpy`, `scipy`, `cartopy` and `numcodecs` have no builds for Python 3.13 or later, so if `python3 --version` shows 3.13 or newer, name an older Python instead, e.g. `python3.12 -m venv .venv` (installers at python.org):
 
 ```bash
 python3 -m venv .venv
