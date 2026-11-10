@@ -10,6 +10,7 @@ Observations are sorted by (trajectory, time), and every time is on the hour.
 """
 
 from functools import cached_property
+import hashlib
 
 import numpy as np
 import xarray as xr
@@ -30,6 +31,15 @@ class Drifters:
     def __init__(self, path):
         self.path = path
         self.ds = xr.open_dataset(path)
+
+    @cached_property
+    def fingerprint(self):
+        """SHA-256 of the positions and times as stored: a wind file fits only the subset it was built for."""
+        h = hashlib.sha256()
+        for name in ("lon", "lat"):
+            h.update(np.ascontiguousarray(self.ds[name].values).tobytes())
+        h.update(self.ds["time"].values.astype("datetime64[s]").astype(np.int64).tobytes())
+        return h.hexdigest()
 
     @cached_property
     def lon(self):

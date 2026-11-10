@@ -11,7 +11,7 @@ Every step in the order `python -m agulhas all` runs it (`agulhas/pipeline.py`),
 | Step | What it does | Reads | Writes |
 |---|---|---|---|
 | `fetch_gdp_subset` | Streams the GDP hourly store chunk by chunk and keeps 5°W–65°E, 60–5°S at hourly resolution, dropping positions across gaps > 6 h; stops rather than drop a chunk that keeps failing. Agulhas only in `all`; `--fetch-box` and `--out` save another region. | GDP hourly zarr store on AWS S3 | subset |
-| `fetch_era5` | ERA5 10 m wind at every drifter position, one year at a time from the CDS API. Agulhas only in `all`. | subset; CDS API (`~/.cdsapirc`) | `data/drifter_wind10m.nc` (another subset: `config.wind_paths`) |
+| `fetch_era5` | ERA5 10 m wind at every drifter position. For the default subset, downloads the published file (`data-v1` release) after checking the subset's fingerprint, then checks its SHA-256; otherwise, or with `--cds`, requests it one year at a time from the CDS API. Agulhas only in `all`. | subset; the data release, or the CDS API (`~/.cdsapirc`) | `data/drifter_wind10m.nc` (another subset: `config.wind_paths`) |
 
 ## Exploration
 
@@ -30,7 +30,7 @@ Every step in the order `python -m agulhas all` runs it (`agulhas/pipeline.py`),
 |---|---|---|---|
 | `transition_matrix` | Drogued and undrogued matrices at 0.5°, 1° and 2°, τ = 3.5 d, with exit and stranded states; a test release off Durban. | subset | `data/P_{drogued,undrogued}_…npz` |
 | `transition_matrix_lags` | The same at 1° for τ = 2, 5 and 7 days (sensitivity, Chapman–Kolmogorov). | subset | `data/P_{drogued,undrogued}_1deg_{2,5,7}d_…npz` |
-| `oil_wind` | Measures undrogued windage against ERA5; builds oil (undrogued + the missing windage) and its drogued check at 3%, 3.5% and 4%; compares them at the release points. Agulhas only. | subset, winds, undrogued matrix, release points, `bootstrap_release_{tag}.csv` (if present) | `data/P_oil*_…npz`, `data/P_oil_check*_…npz`, `data/oil_moves_{tag}.npz`, `data/oil_compare_{tag}.csv`, `figures/{region}_oil_durban_30d_{tag}.png` |
+| `oil_wind` | Stops if the winds were built for another subset (`subset_fingerprint`). Measures undrogued windage against ERA5; builds oil (undrogued + the missing windage) and its drogued check at 3%, 3.5% and 4%; compares them at the release points. Agulhas only. | subset, winds, undrogued matrix, release points, `bootstrap_release_{tag}.csv` (if present) | `data/P_oil*_…npz`, `data/P_oil_check*_…npz`, `data/oil_moves_{tag}.npz`, `data/oil_compare_{tag}.csv`, `figures/{region}_oil_durban_30d_{tag}.png` |
 | `seasonal_matrices` | DJF, MAM, JJA and SON matrices; TVD against the annual matrix and between seasons; permutation test; 30-day release scenarios. | subset, annual matrices, release points | `data/P_{type}_{season}_…npz`, `data/seasonal_{support,tvd_cells,pairwise_tvd,permutation,release_30d}_{tag}.csv`, `figures/{region}_seasonal_summary_{tag}.png` |
 | `seasonal_matrices_res2` | The same at 2°, where drogued seasonal support at 1° is thin. | as above | as above at 2° |
 | `oil_windage` | Oil at 3%, 3.5% and 4% of the wind against undrogued, for traffic, routes and release points, with the 4% − 3% difference on the same drifters. Agulhas only. | coast operators, `coast_counts_{tag}.npz`, `traffic_releases_{tag}.npz`, oil matrices, release points | `data/oil_windage{,_difference,_method_flags}_{tag}.csv`, `figures/agulhas_oil_windage_{tag}.png` |

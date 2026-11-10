@@ -246,6 +246,14 @@ Progress:
 
   - Drogued (15 m) transport shows no seasonal change beyond sampling noise: its large pairwise TVD is what four matrices built from a quarter of the data each differ by anyway. Undrogued transport does change with season, consistent with seasonal winds acting through windage, but only by 0.01–0.02 TVD above the shuffled level. DJF–MAM is the one undrogued pair alike at both grids.
   - The p-values are per pair and not corrected for the 24 tests; with 200 shuffles the smallest possible p is 0.005. The annual operator stays the baseline, with the seasonal operators as a sensitivity check.
+     
+- [x] Calendar-ordered seasonal forecast — `agulhas/release_points/calendar_forecast.py`, following the season-aware chain of Miron et al. (arXiv 1903.06165).
+  - Each of the 13 release points is released in each of the twelve months; every τ step uses the matrix of the season of its start day, and a seasonal row that is flagged or empty takes the annual row. One-year fates are compared with the annual estimate and its 95% drifter-bootstrap interval.
+  - Seasonal rows replaced by the annual row: 75–88% drogued and 25–30% undrogued at 1°; 49–59% and 12–16% at 2°.
+  - Median departure from the annual one-year fate (drogued / undrogued): 0.2 / 0.4 points at 1° and 0.4 / 0.7 at 2°. Estimates outside the annual 95% interval: 1.0% / 5.3% at 1° and 1.6% / 8.5% at 2°.
+  - Largest departures: 23.7 points drogued (Lane 27.5°E, stranded, June release) and 16.4 undrogued (Cape Town, exit west, November release) at 1°; 10.5 (Lane 27.5°E, exit east, December) and 16.2 (Lane 54.5°E, exit east, September) at 2°. At 1°, undrogued estimates outside the interval cluster in June–July releases, with smaller groups in March–April and September–November.
+  - One-year fates change little with the release season on average. Drogued seasonal rows are too thin for this step to say more. The seasonal matrices' own sampling noise is not in the annual intervals, so the comparison is a guide, not a test.
+  - Run `python -m agulhas calendar_forecast` (and `--res 2`); outputs `data/calendar_forecast_{tag}.csv`, `figures/agulhas_calendar_forecast_{tag}.png`.
 
 - [x] Chapman–Kolmogorov consistency — `agulhas/validation/chapman_kolmogorov.py`.
   - Compares `P(3.5 d)^2` with an operator estimated directly from 7-day drifter transitions.

@@ -12,8 +12,9 @@ root.
     python -m agulhas bootstrap --res 1 --tau 3.5    one step, with its own options
 
 A full run keeps one log per step in data/logs/ and stops at the first step that
-fails. Downloads run only when their file is missing (ERA5 needs ~/.cdsapirc and
-takes many hours). Add --help after a step's name for its options.
+fails. Downloads run only when their file is missing; the ERA5 winds for the default
+subset come from the repository's data release, and only another subset needs
+~/.cdsapirc and many hours. Add --help after a step's name for its options.
 """
 
 import argparse
@@ -24,9 +25,8 @@ import subprocess
 import sys
 import time
 
-import requests
-
 from agulhas.config import GDP_LOCAL, SHIP_URL, SHIP_ZIP, wind_paths
+from agulhas.download import download
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOGS = "data/logs"
@@ -94,17 +94,9 @@ NEEDS_SHIPPING = {"shipping_overlay", "box_selection"}
 
 
 def fetch_shipping():
-    """Download the shipping zip to a temporary name, so an interrupted download
-    never looks like the finished file."""
-    os.makedirs(os.path.dirname(SHIP_ZIP), exist_ok=True)
+    """Download the shipping zip (458 MB), read later straight from the zip."""
     print(f"== shipping data ({SHIP_ZIP}, 458 MB)", flush=True)
-    part = SHIP_ZIP + ".part"
-    with requests.get(SHIP_URL, stream=True, timeout=60) as r:
-        r.raise_for_status()
-        with open(part, "wb") as f:
-            for block in r.iter_content(chunk_size=1 << 20):
-                f.write(block)
-    os.replace(part, SHIP_ZIP)
+    download(SHIP_URL, SHIP_ZIP)
 
 
 def ready(step):
@@ -119,8 +111,6 @@ def ready(step):
         if os.path.exists(wind):
             print(f"== {step.name} skipped: {wind} exists", flush=True)
             return False
-        if not os.path.exists(os.path.expanduser("~/.cdsapirc")):
-            raise SystemExit(f"{step.name} needs ERA5 winds: create ~/.cdsapirc (see README), or supply {wind}.")
     return True
 
 

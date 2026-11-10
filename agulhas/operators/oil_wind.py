@@ -65,13 +65,16 @@ M_PER_DEG_LON_EQ = 111_320.0
 SOURCE = "NOAA GDP hourly v2.01 + ERA5 10 m wind (Copernicus CDS)"
 
 
-def load_winds(path, data, n_obs):
-    """ERA5 10 m wind at every observation of the subset, from fetch_era5."""
+def load_winds(path, drifters):
+    """ERA5 10 m wind at every observation of the subset, from fetch_era5. Stops if the
+    file was built for another subset: winds are matched to positions by order alone."""
     wind = xr.open_dataset(path)
     u10 = wind["u10"].values.astype(float)
     v10 = wind["v10"].values.astype(float)
-    if len(u10) != n_obs:
-        raise SystemExit(f"{path} does not match {data}: rerun fetch_era5 for this subset.")
+    built_for = wind.attrs.get("subset_fingerprint")
+    if len(u10) != len(drifters.lon) or (built_for and built_for != drifters.fingerprint):
+        raise SystemExit(f"{path} was built for another subset than {drifters.path}: "
+                         "delete it and rerun fetch_era5.")
     return u10, v10
 
 
@@ -414,7 +417,7 @@ def main(argv=None):
     out_compare = f"data/oil_compare_{tag}.csv"
 
     moves = MoveSet(Drifters(args.data), args.box, args.res, args.tau)
-    u10, v10 = load_winds(wind_paths(args.data)[1], args.data, len(moves.drifters.lon))
+    u10, v10 = load_winds(wind_paths(args.data)[1], moves.drifters)
     print(f"Wind available at {np.isfinite(u10[moves.in_R]).mean():.1%} of positions in R")
     rng = np.random.default_rng(SEED)
     alpha_u = measure_alpha(SlipFit(moves, u10, v10), moves.grid, rng)

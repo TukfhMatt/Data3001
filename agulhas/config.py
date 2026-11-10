@@ -19,6 +19,10 @@ SHIP_URL = ("https://datacatalogfiles.worldbank.org/ddh-published/0037580/5/"
             "DR0045405/shipdensity_commercial_.zip")
 SHIP_ZIP = "data/shipping/shipdensity_commercial.zip"
 GDP_LOCAL = "data/agulhas_gdp1h_subset.nc"   # written by fetch_gdp_subset
+# ERA5 winds at GDP_LOCAL's positions, published with the repository so a run needs no CDS account
+WIND_URL = "https://github.com/TukfhMatt/Data3001/releases/download/data-v1/drifter_wind10m.nc"
+WIND_SHA256 = "08f83d03d6d5cec26eff78ab1619184ee4bf5705f66c0056ca11b5f88ecb18f3"
+WIND_SUBSET = "70bb9d892104087878384940dd1724a1b798a09f0198a30c3169e2ce6845ce82"   # Drifters.fingerprint they fit
 BOX = (10.0, 55.0, -45.0, -15.0)             # lon_min, lon_max, lat_min, lat_max (group choice, see box_selection)
 RESOLUTIONS = [0.5, 1.0, 2.0]                # grids compared in grid_coverage and built in transition_matrix
 RES = 1.0                                    # grid for single-grid steps (shipping_overlay)

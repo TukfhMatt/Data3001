@@ -40,13 +40,13 @@ The box balances shipping risk against oil retention (scored in `box_selection`)
   - **Drogued**: a sea anchor at 15 m is attached, so the drifter follows the near-surface current with little wind effect. This is passive water transport (e.g. a submerged container).
   - **Undrogued**: the drogue has been lost, so the drifter rides at the surface and slips downwind by about 10 cm/s (2.0% of the ERA5 10 m wind: eastward under the westerlies, north-westward under the trades). Closest match to oil, but oil drifts at about 3.5% of wind speed, so the oil matrix adds the missing 1.5%.
   - The two are not pooled: an "all drifters" matrix mixes 46–84% undrogued data depending on the cell, so its wind effect would follow sampling history rather than physics.
-- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`fetch_era5`, `oil_wind`).
+- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`fetch_era5`, `oil_wind`). The winds at the Agulhas subset's positions are published as a [data release](https://github.com/TukfhMatt/Data3001/releases/tag/data-v1) of this repository (`drifter_wind10m.nc`, 136 MB; generated using Copernicus Climate Change Service information, 2026), so a run needs no CDS account. `fetch_era5` downloads them and checks their SHA-256, but only if the local subset holds the same positions and times as the one they were built for (`Drifters.fingerprint`, which compares content rather than file bytes); otherwise, and for any other subset, it requests them from the CDS.
 
 ---
 
 ## Setup
 
-Python 3.9, with a virtual environment in `.venv/`:
+Python 3.9 to 3.12, with a virtual environment in `.venv/`. The results were built and checked on 3.9. The pinned `numpy`, `scipy`, `cartopy` and `numcodecs` have no builds for Python 3.13 or later, so if `python3 --version` shows 3.13 or newer, name an older Python instead, e.g. `python3.12 -m venv .venv` (installers at python.org):
 
 ```bash
 python3 -m venv .venv
@@ -56,16 +56,16 @@ pip install -r requirements.txt
 
 ### Or with Docker
 
-Docker gives the same environment without installing Python or any libraries. The image holds the code and its pinned dependencies only: `data/` and `figures/` are mounted from the repository, so downloads and outputs stay on disk between runs. Build and run it for x86-64 (`linux/amd64`), where every pinned package has a prebuilt wheel; on Apple silicon Docker emulates x86-64, which is slower but gives the same matrices.
+Docker gives the same environment without installing Python or any libraries. The image holds the code and its pinned dependencies only: `data/` and `figures/` are mounted from the repository, so downloads and outputs stay on disk between runs. It builds for the machine it is on, x86-64 or ARM (Apple silicon), with the same pinned versions. On ARM, `cartopy`, `numcodecs` and `rasterio` have no prebuilt Linux wheels, so the first build compiles them, rasterio against Debian's GDAL; that build takes about 4 minutes, against under a minute on x86-64.
 
 ```bash
-docker build --platform linux/amd64 -t agulhas .
-docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas                                  # python -m agulhas all
-docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas python -m agulhas exit_zones  # one step
-docker run --rm --platform linux/amd64 agulhas python -m pytest
+docker build -t agulhas .
+docker run --rm -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas                                  # python -m agulhas all
+docker run --rm -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas python -m agulhas exit_zones  # one step
+docker run --rm agulhas python -m pytest
 ```
 
-`fetch_era5` needs CDS credentials when `data/drifter_wind10m.nc` is missing: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run (`python -m agulhas all`, starting from an empty `data/` apart from `drifter_wind10m.nc`) takes about 3 hours under emulation on an Apple-silicon laptop, within Docker Desktop's 8 GB memory limit; the drifter and shipping downloads take about 10 minutes of that. Its tables match a native run to floating-point rounding, which shows only in near-zero bootstrap bounds.
+The ERA5 winds download from the data release, so the container needs no CDS credentials; only another subset, or `fetch_era5 --cds`, needs them: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run in the container from an empty `data/`, downloads included, took 1 h 45 min on a 16 GB Apple-silicon Mac that was busy with other work; three quarters of that is the bootstrap resampling in `known_features`, `risk_atlas` and `hypothesis_tests`. Its tables match a native macOS run apart from floating-point rounding in a few near-zero values.
 
 `cartopy` is optional for most plots, which can fall back to plain matplotlib without coastlines. However, `coastal_pooling` requires both `cartopy` and `shapely` to apply its Natural Earth 50m geographic filter.
 
@@ -129,7 +129,7 @@ python -m agulhas list                         # print the steps
 python -m agulhas all --from coastal_stranding  # resume at a step
 ```
 
-Downloads run only when their file is missing: `fetch_gdp_subset` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `fetch_era5` (ERA5 winds, which need `~/.cdsapirc`, a CDS account and the ERA5 licence, and take many hours). Run these commands from the repository root; outputs go to `data/` and `figures/` there. Any single step can also be run by name, e.g. `python -m agulhas exit_zones`. [docs/pipeline.md](docs/pipeline.md) says what each one does, reads and writes.
+Downloads run only when their file is missing: `fetch_gdp_subset` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `fetch_era5` (the ERA5 winds, 136 MB from the data release; only another subset or `--cds` needs `~/.cdsapirc`, a CDS account and the ERA5 licence, and many hours). No account or login is needed for a full run. Run these commands from the repository root; outputs go to `data/` and `figures/` there. Any single step can also be run by name, e.g. `python -m agulhas exit_zones`. [docs/pipeline.md](docs/pipeline.md) says what each one does, reads and writes.
 
 Most steps take the region, grid and lag as options; add `--help` after a step's name to see which (defaults in `agulhas/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
 
@@ -139,6 +139,8 @@ python -m agulhas transition_matrix --box 10 55 -41 -15 --res 1 --tau 2 3.5 5   
 python -m agulhas shipping_overlay --res 1 --tau 3.5                           # needs that matrix from transition_matrix
 python -m agulhas seasonal_matrices --res 1 --tau 3.5
 python -m agulhas seasonal_matrices --res 2 --tau 3.5                         # coarser seasonal robustness check
+python -m agulhas calendar_forecast --res 1 --tau 3.5                         # one-year fates by release month; needs seasonal_matrices and bootstrap at the same setting
+python -m agulhas calendar_forecast --res 2 --tau 3.5                         # the same at 2° (also needs bootstrap --res 2)
 python -m agulhas transition_matrix --res 1 --tau 7                           # direct 2τ matrix needed by chapman_kolmogorov
 python -m agulhas chapman_kolmogorov --res 1 --tau 3.5                        # P(τ)^2 vs direct P(2τ)
 python -m agulhas coastal_pooling --res 1 --tau 3.5                           # needs the annual matrices from transition_matrix
@@ -287,6 +289,7 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] Held-out validation to one year: fates across R agree within 3.7 points at day 364 (undrogued from 105 drifters, drogued from only 14). Undrogued exits east are under-predicted by up to 4.4 points, the highest undrogued retention is overstated by about 10 points, and single release points cannot be tested at a year
 - [x] Sensitivity to τ and grid size: τ = 2–5 days gives the same results; 1° is used (0.5° adds no skill and has 50% thin drogued rows, 2° loses short-range skill and shifts one-year fates)
 - [x] Seasonal matrices, with a permutation test: no drogued seasonality beyond sampling noise, a small but real undrogued one
+- [x] Calendar-ordered seasonal forecast: for a release in each month, every step uses its season's matrix; one-year fates differ from the annual matrix by a median of 0.2 / 0.4 points (drogued / undrogued) at 1° and 0.4 / 0.7 at 2°, with 1.0% / 5.3% and 1.6% / 8.5% of estimates outside the annual 95% interval. Drogued seasonal rows are mostly replaced by the annual row (49–88%), so only the undrogued result is informative
 - [x] Chapman–Kolmogorov check: `P(3.5 d)^2` against direct 7-day transitions; median row TVD 0.243 / 0.173 for drogued / undrogued, almost all sampling noise (1.8% / 3.7% of rows above their 95% noise level)
 - [x] Coastal pooling: Natural Earth 50m conservative geographic filter reduces 103 candidates to 99 coastal cells, grouped into 44 short segments; 29 segments are reliable for both drogue types, while 15 remain thin and flagged
 - [x] ERA5 winds at every drifter position; oil matrix = undrogued + the missing 1.5% windage (undrogued carries 2.0%), with a drogued + 3.5% check
