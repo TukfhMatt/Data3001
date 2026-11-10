@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from agulhas.config import (DISAGREE_TVD, OIL_MASS_CASES, OIL_WINDAGE_RANGE, grid_shape, oil_mass_left, operator_path,
+from agulhas.config import (DISAGREE_TVD, OIL_RESIDUE_DAYS, OIL_WINDAGE_RANGE, grid_shape, oil_mass_left, operator_path,
                             parse_args, release_points_path, setting_tag)
 from agulhas.plotting import save_figure
 from agulhas.stats import interval
@@ -67,8 +67,8 @@ def load_releases(op, traffic_path, points):
 
 def outcomes(P, W, n_cells, tau):
     """Per release: stranding per coast eventually and within HORIZON_DAYS, days
-    to strand, exits, and the share of oil mass stranded within a year, for heavy
-    fuel oil (mass) and for fast loss (mass_fast)."""
+    to strand, exits, and the share of heavy fuel oil mass stranded within a year,
+    for each residue time of OIL_RESIDUE_DAYS (mass, mass_30d, mass_120d)."""
     horizon_steps = int(round(HORIZON_DAYS / tau))
     fate, visits = stranding_chain(P, n_cells, STRANDED)
     wf = W @ fate
@@ -78,17 +78,17 @@ def outcomes(P, W, n_cells, tau):
     p = np.zeros((len(W), P.shape[0]))
     p[:, :n_cells] = W
     prev = p[:, n_cells + STRANDED:].copy()
-    mass = {case: np.zeros((len(W), len(COAST_LABELS))) for case in OIL_MASS_CASES}
+    mass = {key: np.zeros((len(W), len(COAST_LABELS))) for key in OIL_RESIDUE_DAYS}
     for step in range(1, int(round(YEAR_DAYS / tau)) + 1):
         p = p @ P
         new = p[:, n_cells + STRANDED:]
-        for case in OIL_MASS_CASES:
-            mass[case] += (new - prev) * oil_mass_left(step * tau, case)
+        for key, residue in OIL_RESIDUE_DAYS.items():
+            mass[key] += (new - prev) * oil_mass_left(step * tau, residue)
         prev = new.copy()
         if step == horizon_steps:
             within = new.copy()
     return {"eventual": wf[:, STRANDED:], "within": within, "days": days, "exit": wf[:, :STRANDED],
-            "mass": mass["heavy_fuel"], "mass_fast": mass["fast_loss"]}
+            **mass}
 
 
 def resample_all(ops, counts, W, args):
@@ -123,8 +123,8 @@ def outcome_table(full, draws, rel):
 
     rows = []
     for name in MATRICES:
-        for metric, targets in [("eventual", COAST_LABELS), ("within", COAST_LABELS), ("mass", COAST_LABELS),
-                                ("mass_fast", COAST_LABELS), ("exit", EXIT_NAMES)]:
+        for metric, targets in [("eventual", COAST_LABELS), ("within", COAST_LABELS)] \
+                + [(key, COAST_LABELS) for key in OIL_RESIDUE_DAYS] + [("exit", EXIT_NAMES)]:
             est, lo_hi = full[name][metric], interval(draws[name][metric])
             for k, target in enumerate(targets):
                 rows += rows_of(name, metric, target, est[:, k], (lo_hi[0][:, k], lo_hi[1][:, k]))
@@ -220,8 +220,8 @@ def print_stranding(table, rel):
     print(coast_rows.assign(text=[f"{100 * e:.1f} ({100 * lo:.1f}–{100 * hi:.1f})" for e, lo, hi
                                   in zip(coast_rows["estimate"], coast_rows["lo"], coast_rows["hi"])])
           .pivot(index="target", columns="matrix", values="text")[MATRICES].reindex(COAST_LABELS).to_string())
-    for metric, label in [("mass", "heavy fuel oil"), ("mass_fast", "fast loss, 14 d")]:
-        print(f"\nOil mass stranded within a year, any coast, {label} (%):")
+    for metric, residue in OIL_RESIDUE_DAYS.items():
+        print(f"\nHeavy fuel oil mass stranded within a year, any coast, residue lost over {residue:g} d (%):")
         print(pivot(table, rel, metric, "any", digits=1).to_string())
     print("\nRelease points, eventually stranded, any coast (%):")
     print(pivot(table, rel, "eventual", "any", kind="point").to_string())

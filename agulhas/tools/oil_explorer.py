@@ -6,7 +6,7 @@ matrices with their stranding split by coast (coastal_stranding): oil, and the
 undrogued and drogued drifters it is built from, which a toggle switches between, and
 does the matrix steps in the browser, so it needs no server. For oil it offers two
 views: where the oil drifts (transport only, as in the atlas) and how much is left for
-heavy fuel oil (config.oil_mass_left).
+heavy fuel oil (config.oil_mass_left, with its headline residue time).
 
 It reports what a reader needs to judge the answer: the drifters behind the
 release cell in the chosen matrix, whether the cell is thin, the atlas's 95%
@@ -24,7 +24,8 @@ import os
 import numpy as np
 import pandas as pd
 
-from agulhas.config import DISAGREE_TVD, MIN_DRIFTERS, OIL_MASS_CASES, operator_path, parse_args, release_points_path, setting_tag
+from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_EVAPORATES, OIL_EVAPORATION_DAYS, OIL_RESIDUE_DAYS, operator_path,
+                            parse_args, release_points_path, setting_tag)
 from agulhas.transport import COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, check_coast_box, load_operator, reliable
 
 HORIZONS = [7, 30, 365]
@@ -119,7 +120,8 @@ def page_data(ops, args, tvd, atlas, points, land):
         "cellFlat": oil["cell_flat"].astype(int).tolist(),
         "edges": EXIT_LABELS[:STRANDED].tolist(), "coasts": COAST_LABELS.tolist(), "coastNames": COAST_NAMES.tolist(),
         "disagreeTvd": DISAGREE_TVD, "minDrifters": MIN_DRIFTERS,
-        "massPersistent": OIL_MASS_CASES["heavy_fuel"]["persistent"], "massTau": OIL_MASS_CASES["heavy_fuel"]["tau_days"],
+        "evaporates": OIL_EVAPORATES, "evaporationDays": OIL_EVAPORATION_DAYS,
+        "residueDays": OIL_RESIDUE_DAYS["mass"], "residueRange": [min(OIL_RESIDUE_DAYS.values()), max(OIL_RESIDUE_DAYS.values())],
         "alphaOil": float(oil["alpha_oil"]),
         "alphaUndrogued": float(oil["alpha_undrogued"]), "alphaAdded": float(oil["alpha_added"]),
         "years": oil["years"].astype(int).tolist(),

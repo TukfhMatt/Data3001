@@ -47,11 +47,12 @@ def test_parse_args_rejects_options_a_step_does_not_take(tmp_path):
         parse_args("Title", argv=["--res", "2", "--data", str(tmp_path / "none.nc")])
 
 
-def test_oil_mass_left_keeps_a_persistent_share_and_the_fast_case_decays_away():
-    from agulhas.config import oil_mass_left
+def test_oil_mass_left_loses_the_evaporating_share_in_days_and_the_residue_over_months():
+    from agulhas.config import OIL_RESIDUE_DAYS, oil_mass_left
 
-    assert oil_mass_left(0) == 1.0 and oil_mass_left(0, "fast_loss") == 1.0
-    assert abs(oil_mass_left(365) - 0.85) < 1e-12                      # heavy fuel oil keeps 85%
-    assert abs(oil_mass_left(14, "fast_loss") - np.exp(-1)) < 1e-12    # 14-day e-folding, no persistent share
-    assert oil_mass_left(365, "fast_loss") < 1e-10
+    assert oil_mass_left(0) == 1.0
+    assert abs(oil_mass_left(14) - 0.85 * np.exp(-14 / 60)) < 1e-3     # evaporation done, residue still mostly there
+    assert abs(oil_mass_left(60) - 0.85 * np.exp(-1)) < 1e-12          # 60-day e-folding of the residue
+    assert oil_mass_left(365) < 0.01
+    assert oil_mass_left(90, OIL_RESIDUE_DAYS["mass_30d"]) < oil_mass_left(90) < oil_mass_left(90, OIL_RESIDUE_DAYS["mass_120d"])
     assert (np.diff(oil_mass_left(np.arange(0, 400, 7))) <= 0).all()
