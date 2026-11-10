@@ -56,16 +56,16 @@ pip install -r requirements.txt
 
 ### Or with Docker
 
-Docker gives the same environment without installing Python or any libraries. The image holds the code and its pinned dependencies only: `data/` and `figures/` are mounted from the repository, so downloads and outputs stay on disk between runs. Build and run it for x86-64 (`linux/amd64`), where every pinned package has a prebuilt wheel; on Apple silicon Docker emulates x86-64, which is slower but gives the same matrices.
+Docker gives the same environment without installing Python or any libraries. The image holds the code and its pinned dependencies only: `data/` and `figures/` are mounted from the repository, so downloads and outputs stay on disk between runs. It builds for the machine it is on, x86-64 or ARM (Apple silicon), with the same pinned versions. On ARM, `cartopy`, `numcodecs` and `rasterio` have no prebuilt Linux wheels, so the first build compiles them, rasterio against Debian's GDAL; that build takes about 4 minutes, against under a minute on x86-64.
 
 ```bash
-docker build --platform linux/amd64 -t agulhas .
-docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas                                  # python -m agulhas all
-docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas python -m agulhas exit_zones  # one step
-docker run --rm --platform linux/amd64 agulhas python -m pytest
+docker build -t agulhas .
+docker run --rm -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas                                  # python -m agulhas all
+docker run --rm -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" agulhas python -m agulhas exit_zones  # one step
+docker run --rm agulhas python -m pytest
 ```
 
-The ERA5 winds download from the data release, so the container needs no CDS credentials; only another subset, or `fetch_era5 --cds`, needs them: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run (`python -m agulhas all`, starting from an empty `data/`) takes about 3 hours under emulation on an Apple-silicon laptop, within Docker Desktop's 8 GB memory limit; the drifter and shipping downloads take about 10 minutes of that. Its tables match a native run to floating-point rounding, which shows only in near-zero bootstrap bounds.
+The ERA5 winds download from the data release, so the container needs no CDS credentials; only another subset, or `fetch_era5 --cds`, needs them: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run in the container from an empty `data/`, downloads included, took 1 h 45 min on a 16 GB Apple-silicon Mac that was busy with other work; three quarters of that is the bootstrap resampling in `known_features`, `risk_atlas` and `hypothesis_tests`. Its tables match a native macOS run apart from floating-point rounding in a few near-zero values.
 
 `cartopy` is optional for most plots, which can fall back to plain matplotlib without coastlines. However, `coastal_pooling` requires both `cartopy` and `shapely` to apply its Natural Earth 50m geographic filter.
 
