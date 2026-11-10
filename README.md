@@ -40,7 +40,7 @@ The box balances shipping risk against oil retention (scored in `box_selection`)
   - **Drogued**: a sea anchor at 15 m is attached, so the drifter follows the near-surface current with little wind effect. This is passive water transport (e.g. a submerged container).
   - **Undrogued**: the drogue has been lost, so the drifter rides at the surface and slips downwind by about 10 cm/s (2.0% of the ERA5 10 m wind: eastward under the westerlies, north-westward under the trades). Closest match to oil, but oil drifts at about 3.5% of wind speed, so the oil matrix adds the missing 1.5%.
   - The two are not pooled: an "all drifters" matrix mixes 46–84% undrogued data depending on the cell, so its wind effect would follow sampling history rather than physics.
-- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`fetch_era5`, `oil_wind`).
+- ERA5 10 m winds (Copernicus Climate Data Store) at every drifter position supply the oil matrix's wind term (`fetch_era5`, `oil_wind`). The winds at the Agulhas subset's positions are published as a [data release](https://github.com/TukfhMatt/Data3001/releases/tag/data-v1) of this repository (`drifter_wind10m.nc`, 136 MB; generated using Copernicus Climate Change Service information, 2026), so a run needs no CDS account. `fetch_era5` downloads them and checks their SHA-256, but only if the local subset holds the same positions and times as the one they were built for (`Drifters.fingerprint`, which compares content rather than file bytes); otherwise, and for any other subset, it requests them from the CDS.
 
 ---
 
@@ -65,7 +65,7 @@ docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures
 docker run --rm --platform linux/amd64 agulhas python -m pytest
 ```
 
-`fetch_era5` needs CDS credentials when `data/drifter_wind10m.nc` is missing: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run (`python -m agulhas all`, starting from an empty `data/` apart from `drifter_wind10m.nc`) takes about 3 hours under emulation on an Apple-silicon laptop, within Docker Desktop's 8 GB memory limit; the drifter and shipping downloads take about 10 minutes of that. Its tables match a native run to floating-point rounding, which shows only in near-zero bootstrap bounds.
+The ERA5 winds download from the data release, so the container needs no CDS credentials; only another subset, or `fetch_era5 --cds`, needs them: add `-v "$HOME/.cdsapirc:/root/.cdsapirc:ro"` to the run command once `~/.cdsapirc` exists (if it does not, Docker mounts an empty folder in its place). Each new container downloads Cartopy's Natural Earth coastlines again, so runs need an internet connection. A full run (`python -m agulhas all`, starting from an empty `data/`) takes about 3 hours under emulation on an Apple-silicon laptop, within Docker Desktop's 8 GB memory limit; the drifter and shipping downloads take about 10 minutes of that. Its tables match a native run to floating-point rounding, which shows only in near-zero bootstrap bounds.
 
 `cartopy` is optional for most plots, which can fall back to plain matplotlib without coastlines. However, `coastal_pooling` requires both `cartopy` and `shapely` to apply its Natural Earth 50m geographic filter.
 
@@ -129,7 +129,7 @@ python -m agulhas list                         # print the steps
 python -m agulhas all --from coastal_stranding  # resume at a step
 ```
 
-Downloads run only when their file is missing: `fetch_gdp_subset` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `fetch_era5` (ERA5 winds, which need `~/.cdsapirc`, a CDS account and the ERA5 licence, and take many hours). Run these commands from the repository root; outputs go to `data/` and `figures/` there. Any single step can also be run by name, e.g. `python -m agulhas exit_zones`. [docs/pipeline.md](docs/pipeline.md) says what each one does, reads and writes.
+Downloads run only when their file is missing: `fetch_gdp_subset` (~1.2 GB streamed, 492 MB saved), the shipping data (458 MB, read directly from the zip) and `fetch_era5` (the ERA5 winds, 136 MB from the data release; only another subset or `--cds` needs `~/.cdsapirc`, a CDS account and the ERA5 licence, and many hours). No account or login is needed for a full run. Run these commands from the repository root; outputs go to `data/` and `figures/` there. Any single step can also be run by name, e.g. `python -m agulhas exit_zones`. [docs/pipeline.md](docs/pipeline.md) says what each one does, reads and writes.
 
 Most steps take the region, grid and lag as options; add `--help` after a step's name to see which (defaults in `agulhas/config.py`: R = 10–55°E, 45–15°S; grids 0.5°, 1° and 2°; τ = 3.5 days):
 
