@@ -87,7 +87,7 @@ These only read pipeline outputs, so `all` skips them.
 | Step | What it does | Reads | Writes |
 |---|---|---|---|
 | `worked_example` | Where material released at one point goes after a week, a month and a year, with intervals, coast and method check. | the chosen matrix, its coast operator and `risk_atlas_{tag}.csv` if present | `figures/{region}_worked_example_{matrix}_{point}_{tag}.png` |
-| `oil_explorer` | A single web page that steps the oil matrix from any clicked point. | `P_oil_coast_…npz`, oil and check matrices, `risk_atlas_{tag}.csv`, release points, `agulhas/tools/oil_explorer.html` | `figures/agulhas_oil_explorer_{tag}.html` |
+| `oil_explorer` | A single web page that steps the oil, undrogued or drogued matrix from any clicked point. | `P_{oil,undrogued,drogued}_coast_…npz`, oil and check matrices, `risk_atlas_{tag}.csv`, release points, `agulhas/tools/oil_explorer.html` | `figures/agulhas_oil_explorer_{tag}.html` |
 
 ## OpenDrift comparison
 

@@ -35,9 +35,11 @@ button, select { font: inherit; color: inherit; }
 #play { background: var(--ink); border-color: var(--ink); color: #fff; min-width: 76px; font-weight: 500; }
 .day { font-weight: 600; font-size: 18px; font-variant-numeric: tabular-nums; min-width: 92px; }
 .slider { flex: 1 1 260px; min-width: 200px; accent-color: var(--ink); }
-.jumps, .seg { display: flex; flex-wrap: wrap; gap: 4px; }
+.jumps, .seg { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.seg .label { color: var(--muted); font-size: 13px; margin-right: 4px; }
 .seg button { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; cursor: pointer; }
 .seg button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+.seg button:disabled { color: var(--muted); background: var(--page); cursor: not-allowed; }
 .layout { display: grid; grid-template-columns: max-content minmax(340px, 1fr); gap: 14px; align-items: start; }
 .map-wrap { position: relative; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 canvas { display: block; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); cursor: crosshair; touch-action: manipulation; }
@@ -77,7 +79,7 @@ svg text { font: 400 11px var(--body); fill: var(--muted); }
 <body>
 <main>
   <div class="top">
-    <h1>Where does oil go from here?</h1>
+    <h1 id="title">Where does oil go from here?</h1>
     <p id="intro"></p>
   </div>
   <div class="controls">
@@ -85,7 +87,14 @@ svg text { font: 400 11px var(--body); fill: var(--muted); }
     <span class="day" id="day"></span>
     <input class="slider" id="slider" type="range" min="0" step="1" aria-label="Days since release">
     <div class="jumps" id="jumps"></div>
+    <div class="seg" role="group" aria-label="Which matrix">
+      <span class="label">Moved like</span>
+      <button id="mat-oil" type="button" data-matrix="oil">Oil</button>
+      <button id="mat-undrogued" type="button" data-matrix="undrogued">Undrogued drifters</button>
+      <button id="mat-drogued" type="button" data-matrix="drogued">Drogued drifters</button>
+    </div>
     <div class="seg" role="group" aria-label="What the map shows">
+      <span class="label">Show</span>
       <button id="mode-drift" type="button">Where it drifts</button>
       <button id="mode-mass" type="button">Oil left after decay</button>
     </div>
@@ -135,9 +144,11 @@ function bytes(b64) {
   for (let i = 0; i < s.length; i++) out[i] = s.charCodeAt(i);
   return out.buffer;
 }
-const rowStart = new Uint32Array(bytes(DATA.rowStart));
-const col = new Uint16Array(bytes(DATA.col));
-const val = new Float64Array(bytes(DATA.val));
+const MATRICES = {};
+for (const [name, m] of Object.entries(DATA.matrices)) {
+  MATRICES[name] = { ...m, rowStart: new Uint32Array(bytes(m.rowStart)), col: new Uint16Array(bytes(m.col)), val: new Float64Array(bytes(m.val)) };
+}
+let cur = MATRICES.oil;
 const N = DATA.nCells, NS = DATA.nStates, TAU = DATA.tau, MAX = DATA.maxSteps, KEEP = DATA.massPersistent, MASS_TAU = DATA.massTau;
 const NE = DATA.edges.length, NC = DATA.coasts.length;
 const [LON0, LON1, LAT0, LAT1] = DATA.box;
@@ -147,7 +158,7 @@ const cellLat = DATA.cellFlat.map(f => LAT0 + (Math.floor(f / DATA.nLon) + 0.5) 
 
 // ── The sums: step a release forward, as p @ P ──────────────────────────────
 function step(p) {
-  const q = new Float64Array(NS);
+  const { rowStart, col, val } = cur, q = new Float64Array(NS);
   for (let i = 0; i < NS; i++) {
     const pi = p[i];
     if (pi === 0) continue;
@@ -191,7 +202,7 @@ function summary(tr, s, view) {
 // ── State ───────────────────────────────────────────────────────────────────
 const el = id => document.getElementById(id);
 const defaultPoint = DATA.points.find(p => p.name === "Durban") || DATA.points[0];
-const state = { cell: stateAt(defaultPoint.lon, defaultPoint.lat), step: Math.round(30 / TAU), view: "drift", tr: null, note: "", timer: null, hover: null };
+const state = { cell: stateAt(defaultPoint.lon, defaultPoint.lat), step: Math.round(30 / TAU), matrix: "oil", view: "drift", tr: null, note: "", timer: null, hover: null };
 function stateAt(lon, lat) {
   if (lon < LON0 || lon >= LON1 || lat < LAT0 || lat >= LAT1) return -1;
   const f = Math.floor((lat - LAT0) / DATA.res) * DATA.nLon + Math.floor((lon - LON0) / DATA.res);
@@ -275,7 +286,7 @@ function drawMap() {
   c.restore();
   // Thin cells
   c.strokeStyle = cs.muted; c.lineWidth = 1;
-  for (let s = 0; s < N; s++) if (!DATA.reliable[s]) { c.beginPath(); c.arc(X(cellLon[s]), Y(cellLat[s]), 2.1, 0, 7); c.stroke(); }
+  for (let s = 0; s < N; s++) if (!cur.reliable[s]) { c.beginPath(); c.arc(X(cellLon[s]), Y(cellLat[s]), 2.1, 0, 7); c.stroke(); }
   // Labels
   c.textAlign = "center"; c.textBaseline = "middle";
   c.font = `500 ${geom.w < 520 ? 10 : 12}px ${css("--body")}`; c.fillStyle = cs.muted;
@@ -335,21 +346,21 @@ const ROWS = [
 const SHORT_COAST = ["Atlantic and Cape", "South Africa, south and east", "Southern Mozambique", "Central and northern Mozambique", "West and south Madagascar", "East Madagascar"];
 function valueOf(sum, key) { return key === "afloat" ? sum.afloat : key === "stranded" ? sum.stranded : key === "gone" ? sum.gone : sum.edge[key]; }
 function drawPanel() {
-  const s = state.cell, sum = summary(state.tr, state.step, state.view), iv = state.view === "drift" ? DATA.intervals[state.step] : null;
+  const s = state.cell, sum = summary(state.tr, state.step, state.view), iv = state.view === "drift" ? cur.intervals[state.step] : null;
   const preset = DATA.points.find(p => stateAt(p.lon, p.lat) === s);
   el("place").textContent = preset && !preset.name.startsWith("Lane") ? `${preset.name}, ${fmtPlace(cellLon[s], cellLat[s])}` : fmtPlace(cellLon[s], cellLat[s]);
   el("preset").value = preset ? preset.name : "";
-  const n = DATA.drifters[s], ok = DATA.reliable[s];
-  el("pill").innerHTML = ok ? `<span class="pill ok">Reliable: ${n} drifters</span>` : `<span class="pill warn">Thin: ${DATA.empty[s] ? "no moves of its own" : n + (n === 1 ? " drifter" : " drifters")}</span>`;
+  const n = cur.drifters[s], ok = cur.reliable[s];
+  el("pill").innerHTML = ok ? `<span class="pill ok">Reliable: ${n} drifters</span>` : `<span class="pill warn">Thin: ${cur.empty[s] ? "no moves of its own" : n + (n === 1 ? " drifter" : " drifters")}</span>`;
   const notices = [];
   if (state.note) notices.push(`<div class="notice" style="border-left-color:var(--accent);background:var(--page)">${state.note}</div>`);
   if (!ok) {
-    const near = nearest(cellLon[s], cellLat[s], c => DATA.reliable[c]);
-    const why = DATA.empty[s] ? "No drifter left this cell, so its row borrows from the cells around it." : `Fewer than ${DATA.minDrifters} drifters left this cell.`;
+    const near = nearest(cellLon[s], cellLat[s], c => cur.reliable[c]);
+    const why = cur.empty[s] ? "No drifter left this cell, so its row borrows from the cells around it." : `Fewer than ${DATA.minDrifters} drifters left this cell.`;
     notices.push(`<div class="notice">${why} Treat these numbers as very uncertain. <button type="button" data-cell="${near.state}">Use the nearest reliable cell, ${fmtPlace(cellLon[near.state], cellLat[near.state])}, ${Math.round(near.km)} km away</button></div>`);
   }
-  if (DATA.methodTvd[s] > DATA.disagreeTvd) {
-    notices.push(`<div class="notice">This result depends on the method. At 30 days, the oil matrix and its check differ by a total variation distance of ${DATA.methodTvd[s].toFixed(2)}, above the ${DATA.disagreeTvd} limit.</div>`);
+  if (cur.methodTvd && cur.methodTvd[s] > DATA.disagreeTvd) {
+    notices.push(`<div class="notice">This result depends on the method. At 30 days, the oil matrix and its check differ by a total variation distance of ${cur.methodTvd[s].toFixed(2)}, above the ${DATA.disagreeTvd} limit.</div>`);
   }
   el("notices").innerHTML = notices.join("");
   el("at-day").textContent = `Day ${dayText(state.step)} after release`;
@@ -364,21 +375,24 @@ function drawPanel() {
     ? `Heavy fuel oil left: ${Math.round(100 * KEEP)}% stays and the rest decays with a ${MASS_TAU}-day time scale (evaporation only). Oil that strands or leaves the box counts at the mass it had when it got there.`
     : "Intervals appear at the 1 week, 1 month and 1 year buttons only (days 7, 31.5 and 364, the nearest whole steps).";
   // Coasts
-  const later = state.view === "drift" ? DATA.coasts.map(c => DATA.eventual[c].est[s] / 1000) : summary(state.tr, MAX, "mass").coast;
+  const later = state.view === "drift" ? DATA.coasts.map(c => cur.eventual[c].est[s] / 1000) : summary(state.tr, MAX, "mass").coast;
   const top = Math.max(0.01, ...later, ...sum.coast);
   el("coast-now").textContent = `Day ${dayText(state.step)}`;
   el("coast-later").textContent = state.view === "drift" ? "Eventually" : `Day ${dayText(MAX)}`;
   el("coasts").innerHTML = DATA.coasts.map((c, k) => {
-    const range = state.view === "drift" ? ` <span style="color:var(--muted);font-weight:400">(${milleRange(DATA.eventual[c].lo[s], DATA.eventual[c].hi[s])})</span>` : "";
+    const range = state.view === "drift" ? ` <span style="color:var(--muted);font-weight:400">(${milleRange(cur.eventual[c].lo[s], cur.eventual[c].hi[s])})</span>` : "";
     return `<tr><td>${SHORT_COAST[k]}<span class="cbar" style="width:${Math.max(sum.coast[k] > 0 ? 1 : 0, sum.coast[k] / top * 100)}%"></span></td><td class="val">${pct(sum.coast[k])}</td><td>${pct(later[k])}${range}</td></tr>`;
   }).join("");
-  const d = DATA.daysToStrand[s];
+  const d = cur.daysToStrand[s];
   el("strand-days").textContent = state.view === "drift" && d ? `Of what eventually strands, the average trip takes ${d[0]} days (${d[1]}–${d[2]}).` : "";
   // Top controls
   el("day").textContent = `Day ${dayText(state.step)}`;
   el("slider").value = state.step;
   el("mode-drift").setAttribute("aria-pressed", state.view === "drift");
   el("mode-mass").setAttribute("aria-pressed", state.view === "mass");
+  el("mode-mass").disabled = state.matrix !== "oil";
+  el("mode-mass").title = state.matrix === "oil" ? "" : "Only for oil: drifters do not weather";
+  for (const name of Object.keys(MATRICES)) el(`mat-${name}`).setAttribute("aria-pressed", state.matrix === name);
   el("scale-label").textContent = state.view === "drift" ? "Share of the release in each 1° cell" : "Oil mass left in each 1° cell, as a share of the release";
 }
 
@@ -443,6 +457,13 @@ function setCell(cell, note) {
   drawPanel(); buildChart(); drawMap();
 }
 function setView(v) { state.view = v; drawPanel(); buildChart(); drawMap(); }
+// Heavy fuel oil's mass loss belongs to oil only, so the drifter matrices show where material drifts
+function setMatrix(name) {
+  state.matrix = name; cur = MATRICES[name];
+  if (name !== "oil") state.view = "drift";
+  state.tr = trajectory(state.cell);
+  describe(); drawPanel(); buildChart(); drawMap();
+}
 function stopPlay() { if (state.timer) { clearInterval(state.timer); state.timer = null; el("play").textContent = "Play"; } }
 function startPlay() {
   if (state.step >= MAX) setStep(0);
@@ -458,6 +479,7 @@ el("slider").addEventListener("input", ev => { stopPlay(); setStep(+ev.target.va
   b.addEventListener("click", () => { stopPlay(); setStep(Math.round(d / TAU)); });
   el("jumps").appendChild(b);
 });
+document.querySelectorAll("[data-matrix]").forEach(b => b.addEventListener("click", () => setMatrix(b.dataset.matrix)));
 el("mode-drift").addEventListener("click", () => setView("drift"));
 el("mode-mass").addEventListener("click", () => setView("mass"));
 el("notices").addEventListener("click", ev => { const c = ev.target.getAttribute && ev.target.getAttribute("data-cell"); if (c !== null && c !== undefined) setCell(+c); });
@@ -481,7 +503,7 @@ canvas.addEventListener("pointermove", ev => {
   if (mark >= 0) { showTip(ev, `<strong>${DATA.coastNames[mark]}</strong><br>${pct(sum.coast[mark])} of the release stranded here by day ${dayText(state.step)}`); return; }
   if (s < 0) { hideTip(); return; }
   const v = state.tr.dist[state.step][s] * (state.view === "mass" ? state.tr.mass[state.step].decay : 1);
-  showTip(ev, `<strong>${fmtPlace(cellLon[s], cellLat[s])}</strong><br>${pct(v)} of the release here on day ${dayText(state.step)}<br>${DATA.reliable[s] ? `${DATA.drifters[s]} drifters` : (DATA.empty[s] ? "Thin: no moves of its own" : `Thin: ${DATA.drifters[s]} drifters`)}. Click to release here.`);
+  showTip(ev, `<strong>${fmtPlace(cellLon[s], cellLat[s])}</strong><br>${pct(v)} of the release here on day ${dayText(state.step)}<br>${cur.reliable[s] ? `${cur.drifters[s]} drifters` : (cur.empty[s] ? "Thin: no moves of its own" : `Thin: ${cur.drifters[s]} drifters`)}. Click to release here.`);
 });
 canvas.addEventListener("pointerleave", hideTip);
 canvas.addEventListener("keydown", ev => {
@@ -494,15 +516,34 @@ canvas.addEventListener("keydown", ev => {
 new ResizeObserver(() => { layout(); drawMap(); buildChart(); }).observe(el("layout"));
 window.addEventListener("resize", () => { layout(); drawMap(); });
 
-el("intro").textContent = `Click the sea, then play the year. Based on undrogued drifters from ${DATA.years[0]}–${DATA.years[1]}, which already carry about ${(DATA.alphaUndrogued * 100).toFixed(1)}% of the wind, moved by a further ${(DATA.alphaAdded * 100).toFixed(1)}% to reach ${(DATA.alphaOil * 100).toFixed(1)}% for oil.`;
+const YEARS = `${DATA.years[0]}–${DATA.years[1]}`;
+const ABOUT = {
+  oil: {
+    title: "Where does oil go from here?",
+    intro: `Click the sea, then play the year. Based on undrogued drifters from ${YEARS}, which already carry about ${(DATA.alphaUndrogued * 100).toFixed(1)}% of the wind, moved by a further ${(DATA.alphaAdded * 100).toFixed(1)}% to reach ${(DATA.alphaOil * 100).toFixed(1)}% for oil.`,
+  },
+  undrogued: {
+    title: "Where does a floating object go from here?",
+    intro: `Click the sea, then play the year. Undrogued drifters from ${YEARS}: the surface current plus about ${(DATA.alphaUndrogued * 100).toFixed(1)}% of the wind, like an object floating at the surface. Oil is these moves plus a further ${(DATA.alphaAdded * 100).toFixed(1)}% of the wind.`,
+  },
+  drogued: {
+    title: "Where does the current carry material from here?",
+    intro: `Click the sea, then play the year. Drogued drifters from ${YEARS}: the current at 15 m with little wind, like a mostly submerged object such as a lost container.`,
+  },
+};
+function describe() {
+  el("title").textContent = ABOUT[state.matrix].title;
+  el("intro").textContent = ABOUT[state.matrix].intro;
+}
 el("foot").textContent = `Read this as a likely spread under average conditions, not a forecast: the time axis is days since release, with no season, storm or wind shift in it. `
-  + `Each step is ${TAU} days on a ${DATA.res}° grid (about 100 km), and repeated steps spread material more smoothly than a real slick would. Oil that leaves the box is no longer tracked and cannot come back. `
-  + `"Where it drifts" follows the oil without weathering; "Oil left after decay" is for heavy fuel oil, which keeps ${Math.round(100 * KEEP)}% of its mass. `
+  + `Each step is ${TAU} days on a ${DATA.res}° grid (about 100 km), and repeated steps spread material more smoothly than a real slick would. Material that leaves the box is no longer tracked and cannot come back. `
+  + `Oil is the headline; the drifter matrices are the two it is compared with: drogued drifters carry little wind and undrogued drifters about ${(DATA.alphaUndrogued * 100).toFixed(1)}%, and each counts only its own drifters, so a cell can be reliable in one and thin in another. `
+  + `For oil, "Where it drifts" follows it without weathering; "Oil left after decay" is for heavy fuel oil, which keeps ${Math.round(100 * KEEP)}% of its mass. `
   + `Data: NOAA Global Drifter Program and ERA5 winds. Results are weakest close to the coast, and the 95% intervals come from resampling whole drifters and are not corrected for the number of comparisons.`;
 
 state.tr = trajectory(state.cell);
-window.oilExplorer = { trajectory, summary, stateAt, DATA };
-layout(); drawPanel(); buildChart(); drawMap();
+window.oilExplorer = { trajectory, summary, stateAt, setMatrix, DATA };
+describe(); layout(); drawPanel(); buildChart(); drawMap();
 if (document.fonts && document.fonts.ready) document.fonts.ready.then(() => { drawMap(); });
 </script>
 </body>
