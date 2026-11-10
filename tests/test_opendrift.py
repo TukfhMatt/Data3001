@@ -1,6 +1,6 @@
 import numpy as np
 
-from agulhas.opendrift_common import classify
+from agulhas.opendrift_common import classify, hourly_states
 
 BOX = (10.0, 55.0, -45.0, -15.0)
 N_LON = 45
@@ -40,3 +40,17 @@ def test_stranding_counts_only_once_it_has_happened():
 
 def test_a_particle_lost_inside_the_box_is_kept_apart():
     assert sort([20.0, np.nan, np.nan], [-30.0, np.nan, np.nan], last=0, hour=2) == N + 4 + 6
+
+
+def test_every_hour_at_once_matches_one_hour_at_a_time():
+    rng = np.random.default_rng(0)
+    n, t = 300, 12
+    lon = np.cumsum(np.c_[rng.uniform(9.5, 12.0, n), rng.normal(0, 0.4, (n, t - 1))], axis=1)
+    lat = np.cumsum(np.c_[rng.uniform(-45.5, -43.0, n), rng.normal(0, 0.4, (n, t - 1))], axis=1)
+    last = rng.integers(0, t, n)
+    stranded = rng.random(n) < 0.5
+    for i in range(n):
+        lon[i, last[i] + 1:] = lat[i, last[i] + 1:] = np.nan
+    every = hourly_states(lon, lat, stranded, last, CELLS, N, BOX, N_LON)
+    for hour in range(t):
+        assert (every[:, hour] == classify(lon, lat, stranded, last, hour, CELLS, N, BOX, N_LON)).all()

@@ -9,7 +9,8 @@ into the matrix's states at day 7 and day 31.5 (steps 2 and 9), and
 opendrift_compare reads the counts.
 
 Finished starts are skipped, so an interrupted run resumes. Runs for different
-years can go side by side with --years.
+years can go side by side with --years. --matrix oil_3pct or oil_4pct runs the same
+starts at that share of the wind, into points_{name}, for opendrift_compare --matrix.
 
     .venv-opendrift/bin/python -m agulhas opendrift_points --years 2000 2005
 """
@@ -21,11 +22,16 @@ import time
 import numpy as np
 import pandas as pd
 
-from agulhas.config import grid_shape, operator_path, parse_args, release_points_path
-from agulhas.opendrift_common import FORCING, HOURS, N_COASTS, OUT, YEARS, classify, simulate
+from agulhas.config import OIL_WINDAGE_RANGE, grid_shape, operator_path, parse_args, release_points_path
+from agulhas.opendrift_common import FORCING, HOURS, N_COASTS, OIL_WIND, OUT, YEARS, classify, simulate
 from agulhas.transport import check_coast_box, load_operator
 
 N_PER_POINT = 500
+
+
+def points_folder(matrix="oil"):
+    """Where the runs at a matrix's share of the wind are kept."""
+    return f"{OUT}/points" if matrix == "oil" else f"{OUT}/points_{matrix}"
 
 
 def seed_cell(land, lon, lat, res, n, rng):
@@ -78,12 +84,12 @@ def seed_points(land, points, res, rng):
     return np.concatenate(xs), np.concatenate(ys), np.concatenate(marks)
 
 
-def run_start(year, month, points, land, states, res, path):
+def run_start(year, month, points, land, states, res, path, wind=OIL_WIND):
     """One OceanDrift run from the 1st of the month, with its counts saved to path."""
     began = time.time()
     seed = year * 100 + month
     x, y, marks = seed_points(land, points, res, np.random.default_rng(seed))
-    lon, lat, marker, stranded, last = simulate(datetime(year, month, 1), x, y, marks, max(HOURS.values()), seed)
+    lon, lat, marker, stranded, last = simulate(datetime(year, month, 1), x, y, marks, max(HOURS.values()), seed, wind=wind)
     counts = states.counts(lon, lat, marker, stranded, last, len(points))
     np.savez_compressed(path + ".tmp.npz", counts=counts)
     os.replace(path + ".tmp.npz", path)
@@ -96,19 +102,21 @@ def main(argv=None):
 
     def add_options(p):
         p.add_argument("--years", type=int, nargs="+", default=YEARS, help="years to run")
+        p.add_argument("--matrix", default="oil", choices=list(OIL_WINDAGE_RANGE), help="oil matrix whose share of the wind is used")
 
     args = parse_args(__doc__, grid=True, lag=True, extra=add_options, argv=argv)
     check_coast_box(args.box)
-    os.makedirs(f"{OUT}/points", exist_ok=True)
+    folder = points_folder(args.matrix)
+    os.makedirs(folder, exist_ok=True)
     points = pd.read_csv(release_points_path(args.box))
     states = MatrixStates(args)
     land = RoaringLandmask.new()
     for year in args.years:
         for month in range(1, 13):
-            path = f"{OUT}/points/{year}{month:02d}.npz"
+            path = f"{folder}/{year}{month:02d}.npz"
             if not os.path.exists(path):
-                run_start(year, month, points, land, states, args.res, path)
-    print(f"Forcing read from {FORCING}; counts saved → {OUT}/points/")
+                run_start(year, month, points, land, states, args.res, path, OIL_WINDAGE_RANGE[args.matrix])
+    print(f"Forcing read from {FORCING}; counts saved → {folder}/")
 
 
 if __name__ == "__main__":

@@ -25,8 +25,8 @@ release point means its oil result rests on the method choice.
 Moves into the stranded state (the drifter ran aground inside R within τ)
 are kept as they are. Shifted end points that land on land or on a cell no
 drifter visited keep their unshifted end; their share is printed. Surface
-mass decays as m(t) = exp(−t / DECAY_DAYS), applied when reporting, so P
-itself conserves probability like the drifter matrices.
+mass left is config.oil_mass_left, applied when reporting, so P itself
+conserves probability like the drifter matrices.
 
 Release-point results carry 95% intervals from resampling whole drifters
 (the oil matrix here, undrogued from bootstrap's output), and the number of
@@ -45,8 +45,8 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_WINDAGE_RANGE, operator_path, parse_args, region_prefix,
-                            release_points_path, setting_tag, wind_paths)
+from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_MASS_CASES, OIL_WINDAGE_RANGE, oil_mass_left, operator_path,
+                            parse_args, region_prefix, release_points_path, setting_tag, wind_paths)
 from agulhas.drifters import Drifters
 from agulhas.moves import MoveSet
 from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
@@ -55,7 +55,6 @@ from agulhas.transport import (EXIT_LABELS, STRANDED, coastal_states, drifter_co
                                transition_states)
 
 ALPHA_OIL = OIL_WINDAGE_RANGE["oil"]     # oil drift = surface current + 3.5% of wind
-DECAY_DAYS = 14.0                        # surface oil e-folding time
 HORIZONS = [7, 30, 365]
 FAST_CURRENT = 0.3                       # m/s of mean drogued current, for the check of α without fast cells
 EAST_LON = 35.0                          # for the check of α east of the Agulhas Current
@@ -224,7 +223,7 @@ class OilMoves:
             cell_flat=cells, lon_edges=self.grid.lon_edges, lat_edges=self.grid.lat_edges,
             res=args.res, tau_days=args.tau, exit_labels=EXIT_LABELS, box=np.array(args.box),
             drogued=flag, alpha_added=alpha, alpha_undrogued=self.alpha_u,
-            alpha_oil=alpha_oil, decay_days=DECAY_DAYS,
+            alpha_oil=alpha_oil,
             years=np.array([d.year[s].min(), d.year[s].max()]), source=SOURCE,
         )
         print(f"\n=== {name}: {'drogued' if flag else 'undrogued'} + {100 * alpha:.2f}% wind ===")
@@ -378,8 +377,8 @@ def print_intervals(cmp_):
         print(f"{r['name'][:27]:<28}" + "".join(f"{ci(r, k, m):>22}" for m in ["stranded_30d", "inR_365d"]
                                               for k in ["undrogued", "oil"])
               + f"{r.grounded_drifters_in_cell:>9}")
-    print(f"\nSurface oil remaining (exp(−t/{DECAY_DAYS:g} d)): "
-          + ", ".join(f"{d} d {np.exp(-d / DECAY_DAYS):.1%}" for d in HORIZONS))
+    for case in OIL_MASS_CASES:
+        print(f"Oil mass left, {case}: " + ", ".join(f"{d} d {oil_mass_left(d, case):.1%}" for d in HORIZONS))
 
 
 # ── Map: 30-day distribution from one release point for the three matrices ───

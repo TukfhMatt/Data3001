@@ -20,6 +20,7 @@ distance a single set of years differs from another with the model unchanged. Th
 years do not match the matrix's 1995–2022 period, which is a limit of this check.
 
     .venv-opendrift/bin/python -m agulhas opendrift_compare
+    .venv-opendrift/bin/python -m agulhas opendrift_compare --matrix oil_3pct   # runs from opendrift_points --matrix oil_3pct
 """
 
 import glob
@@ -29,7 +30,8 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 
-from agulhas.config import DISAGREE_TVD, operator_path, parse_args, release_points_path, setting_tag
+from agulhas.comparison.opendrift_points import points_folder
+from agulhas.config import DISAGREE_TVD, OIL_WINDAGE_RANGE, operator_path, parse_args, release_points_path, setting_tag
 from agulhas.opendrift_common import HOURS, N_COASTS, OUT, YEARS
 from agulhas.plotting import save_figure
 from agulhas.transport import COAST_LABELS, check_coast_box, load_operator, state_of
@@ -57,11 +59,11 @@ def largest(dist, n_cells):
 
 # ── 1. The runs: shares for each start, point and horizon ────────────────────
 
-def load_runs():
+def load_runs(folder=f"{OUT}/points"):
     """The start year of each run, and its shares of each state, (starts, points, horizons, states)."""
-    paths = sorted(glob.glob(f"{OUT}/points/*.npz"))
+    paths = sorted(glob.glob(f"{folder}/*.npz"))
     if not paths:
-        raise SystemExit(f"No runs in {OUT}/points: run opendrift_points first.")
+        raise SystemExit(f"No runs in {folder}: run opendrift_points first.")
     starts = [os.path.basename(p)[:6] for p in paths]
     years = np.array([int(s[:4]) for s in starts])
     counts = np.stack([np.load(p)["counts"] for p in paths])
@@ -162,18 +164,22 @@ def plot_comparison(final, n_starts, out):
 
 def main(argv=None):
     """Run this step; see the module docstring for what it does."""
-    args = parse_args(__doc__, grid=True, lag=True, argv=argv)
+    def add_options(p):
+        p.add_argument("--matrix", default="oil", choices=list(OIL_WINDAGE_RANGE), help="oil matrix, and the runs at its share of the wind")
+
+    args = parse_args(__doc__, grid=True, lag=True, extra=add_options, argv=argv)
     check_coast_box(args.box)
     tag = setting_tag(args.res, args.tau, args.box)
-    out = f"{OUT}/compare_{tag}.csv"
-    png = f"figures/agulhas_opendrift_compare_{tag}.png"
+    name = "" if args.matrix == "oil" else f"_{args.matrix}"
+    out = f"{OUT}/compare{name}_{tag}.csv"
+    png = f"figures/agulhas_opendrift_compare{name}_{tag}.png"
     points = pd.read_csv(release_points_path(args.box))
     rng = np.random.default_rng(SEED)
 
-    years, shares = load_runs()
-    op = load_operator(operator_path("oil_coast", args.res, args.tau, args.box))
+    years, shares = load_runs(points_folder(args.matrix))
+    op = load_operator(operator_path(f"{args.matrix}_coast", args.res, args.tau, args.box))
     atlas = pd.read_csv(f"data/risk_atlas_{tag}.csv", low_memory=False)
-    table = compare_points(points, op, atlas[atlas["matrix"] == "oil"], years, shares, args.tau, rng)
+    table = compare_points(points, op, atlas[atlas["matrix"] == args.matrix], years, shares, args.tau, rng)
     table.to_csv(out, index=False)
 
     final = table[table["days"] == 31.5]

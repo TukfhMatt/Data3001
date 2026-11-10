@@ -229,16 +229,22 @@ def run_fold(ho, name, flag, f, folds_traj):
     return records, exit_records
 
 
-def cross_validate(ho, rng):
-    """K_FOLDS folds of whole drifters per drogue type."""
+def folds(ho, rng):
+    """K_FOLDS folds of whole drifters per drogue type: (name, flag, fold, all its drifters, held-out drifters)."""
     d = ho.d
-    records, exit_records = [], []
     for name, flag in DROGUE_TYPES.items():
         trajs = np.unique(d.traj_idx[ho.in_R & (d.drogue == flag)])
         for f, test_traj in enumerate(np.array_split(rng.permutation(trajs), K_FOLDS)):
-            r, e = run_fold(ho, name, flag, f, (trajs, test_traj))
-            records += r
-            exit_records += e
+            yield name, flag, f, trajs, test_traj
+
+
+def cross_validate(ho, rng):
+    """Every fold's scores."""
+    records, exit_records = [], []
+    for name, flag, f, trajs, test_traj in folds(ho, rng):
+        r, e = run_fold(ho, name, flag, f, (trajs, test_traj))
+        records += r
+        exit_records += e
     return pd.DataFrame(records), pd.concat(exit_records)
 
 

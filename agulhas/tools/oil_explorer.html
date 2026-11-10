@@ -138,7 +138,7 @@ function bytes(b64) {
 const rowStart = new Uint32Array(bytes(DATA.rowStart));
 const col = new Uint16Array(bytes(DATA.col));
 const val = new Float64Array(bytes(DATA.val));
-const N = DATA.nCells, NS = DATA.nStates, TAU = DATA.tau, MAX = DATA.maxSteps, DECAY = DATA.decayDays;
+const N = DATA.nCells, NS = DATA.nStates, TAU = DATA.tau, MAX = DATA.maxSteps, KEEP = DATA.massPersistent, MASS_TAU = DATA.massTau;
 const NE = DATA.edges.length, NC = DATA.coasts.length;
 const [LON0, LON1, LAT0, LAT1] = DATA.box;
 const stateOfFlat = new Map(DATA.cellFlat.map((f, s) => [f, s]));
@@ -155,7 +155,7 @@ function step(p) {
   }
   return q;
 }
-// Every step's distribution, with the oil mass left under exp(−t / decay). Mass
+// Every step's distribution, with the heavy fuel oil mass left, KEEP + (1 − KEEP)·exp(−t / MASS_TAU). Mass
 // that strands or leaves R keeps what it had when it got there, as in 24.
 function trajectory(state) {
   const dist = [], mass = [];
@@ -165,7 +165,7 @@ function trajectory(state) {
   const absorbed = new Float64Array(NE + NC);
   mass.push({ absorbed: absorbed.slice(), decay: 1 });
   for (let s = 1; s <= MAX; s++) {
-    const q = step(p), decay = Math.exp(-s * TAU / DECAY);
+    const q = step(p), decay = KEEP + (1 - KEEP) * Math.exp(-s * TAU / MASS_TAU);
     for (let k = 0; k < NE + NC; k++) absorbed[k] += (q[N + k] - p[N + k]) * decay;
     dist.push(q);
     mass.push({ absorbed: absorbed.slice(), decay });
@@ -361,7 +361,7 @@ function drawPanel() {
   }).join("");
   el("int-head").textContent = state.view === "drift" ? "95% interval" : "";
   el("int-note").textContent = state.view === "mass"
-    ? `Oil left under exp(−t / ${DECAY} d), a working value. Oil that strands or leaves the box counts at the mass it had when it got there.`
+    ? `Heavy fuel oil left: ${Math.round(100 * KEEP)}% stays and the rest decays with a ${MASS_TAU}-day time scale (evaporation only). Oil that strands or leaves the box counts at the mass it had when it got there.`
     : "Intervals appear at the 1 week, 1 month and 1 year buttons only (days 7, 31.5 and 364, the nearest whole steps).";
   // Coasts
   const later = state.view === "drift" ? DATA.coasts.map(c => DATA.eventual[c].est[s] / 1000) : summary(state.tr, MAX, "mass").coast;
@@ -497,7 +497,7 @@ window.addEventListener("resize", () => { layout(); drawMap(); });
 el("intro").textContent = `Click the sea, then play the year. Based on undrogued drifters from ${DATA.years[0]}–${DATA.years[1]}, which already carry about ${(DATA.alphaUndrogued * 100).toFixed(1)}% of the wind, moved by a further ${(DATA.alphaAdded * 100).toFixed(1)}% to reach ${(DATA.alphaOil * 100).toFixed(1)}% for oil.`;
 el("foot").textContent = `Read this as a likely spread under average conditions, not a forecast: the time axis is days since release, with no season, storm or wind shift in it. `
   + `Each step is ${TAU} days on a ${DATA.res}° grid (about 100 km), and repeated steps spread material more smoothly than a real slick would. Oil that leaves the box is no longer tracked and cannot come back. `
-  + `"Where it drifts" follows the oil without weathering; "Oil left after decay" uses a working ${DECAY}-day decay. `
+  + `"Where it drifts" follows the oil without weathering; "Oil left after decay" is for heavy fuel oil, which keeps ${Math.round(100 * KEEP)}% of its mass. `
   + `Data: NOAA Global Drifter Program and ERA5 winds. Results are weakest close to the coast, and the 95% intervals come from resampling whole drifters and are not corrected for the number of comparisons.`;
 
 state.tr = trajectory(state.cell);
