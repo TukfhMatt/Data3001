@@ -1,15 +1,17 @@
 """
 Agulhas Region — Oil Explorer
 Builds a single web page: click anywhere in R and watch where oil released there
-goes over a year, step by step, in the matrix's own τ steps. The page holds the
-oil matrix with its stranding split by coast (coastal_stranding), and does the
-matrix steps in the browser, so it needs no server. It offers two views: where the oil drifts
-(transport only, as in the atlas) and how much is left for heavy fuel oil (config.oil_mass_left).
+goes over a year, step by step, in the matrix's own τ steps. The page holds three
+matrices with their stranding split by coast (coastal_stranding): oil, and the
+undrogued and drogued drifters it is built from, which a toggle switches between, and
+does the matrix steps in the browser, so it needs no server. For oil it offers two
+views: where the oil drifts (transport only, as in the atlas) and how much is left for
+heavy fuel oil (config.oil_mass_left).
 
 It reports what a reader needs to judge the answer: the drifters behind the
-release cell, whether the cell is thin, the atlas's 95% intervals at 7 days, 30
-days and 1 year (risk_atlas), and whether the result depends on the method
-(oil_wind). Not part of the pipeline; it only reads its outputs, so run the pipeline first.
+release cell in the chosen matrix, whether the cell is thin, the atlas's 95%
+intervals at 7 days, 30 days and 1 year (risk_atlas), and, for oil, whether the
+result depends on the method (oil_wind). Not part of the pipeline; it only reads its outputs, so run the pipeline first.
 The page itself is agulhas/tools/oil_explorer.html, with the data filled in here.
 
     python -m agulhas oil_explorer
@@ -29,6 +31,7 @@ HORIZONS = [7, 30, 365]
 SIMPLIFY_DEG = 0.03   # coastline detail kept on the page
 TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "oil_explorer.html")
 MARKER = "/*DATA*/null"
+MATRICES = ["oil", "undrogued", "drogued"]   # in the order of the page's toggle; oil is the headline
 
 
 def encode(array, dtype):
@@ -51,10 +54,9 @@ def method_tvd(args, n_cells):
     return 0.5 * np.abs(oil_30 - check_30).sum(axis=1)[:n_cells]
 
 
-def atlas_intervals(path, tau):
-    """The atlas's oil intervals per release cell, in per mille, keyed as the page reads them."""
-    atlas = pd.read_csv(path, low_memory=False)
-    atlas = atlas[atlas["matrix"] == "oil"].sort_values("state")
+def atlas_intervals(atlas, name, tau):
+    """The atlas's intervals for one matrix per release cell, in per mille, keyed as the page reads them."""
+    atlas = atlas[atlas["matrix"] == name].sort_values("state")
     intervals = {}
     for horizon in HORIZONS:
         part = atlas[atlas["horizon"] == str(horizon)]
@@ -88,29 +90,42 @@ def coastline(box):
     return land
 
 
-def page_data(op, args, tvd, atlas, points, land):
-    """Everything the page reads. The matrix is stored row by row, so the page holds exact values."""
+def matrix_data(op, intervals, tvd=None):
+    """One matrix as the page reads it, stored row by row so the page holds exact values."""
     P = op["P"]
     n_cells = len(op["cell_flat"])
     rows, cols = np.nonzero(P)
     row_start = np.searchsorted(rows, np.arange(P.shape[0] + 1))
     return {
-        "box": list(args.box), "res": args.res, "tau": args.tau,
-        "nLon": len(op["lon_edges"]) - 1, "nLat": len(op["lat_edges"]) - 1,
-        "nCells": n_cells, "nStates": P.shape[0],
-        "cellFlat": op["cell_flat"].astype(int).tolist(),
         "rowStart": encode(row_start, "<u4"), "col": encode(cols, "<u2"), "val": encode(P[rows, cols], "<f8"),
-        "edges": EXIT_LABELS[:STRANDED].tolist(), "coasts": COAST_LABELS.tolist(), "coastNames": COAST_NAMES.tolist(),
         "drifters": op["row_drifters"][:n_cells].astype(int).tolist(),
         "flagged": op["flagged"][:n_cells].astype(int).tolist(), "empty": op["empty"][:n_cells].astype(int).tolist(),
         "reliable": reliable(op)[:n_cells].astype(int).tolist(),
-        "methodTvd": np.round(tvd, 3).tolist(), "disagreeTvd": DISAGREE_TVD, "minDrifters": MIN_DRIFTERS,
+        "methodTvd": None if tvd is None else np.round(tvd, 3).tolist(),
+        **intervals,
+    }
+
+
+def page_data(ops, args, tvd, atlas, points, land):
+    """Everything the page reads: what the matrices share, then each matrix in the order of MATRICES."""
+    oil = ops["oil"]
+    for name, op in ops.items():
+        if not np.array_equal(op["cell_flat"], oil["cell_flat"]):
+            raise SystemExit(f"The {name} and oil matrices have different ocean cells.")
+    return {
+        "box": list(args.box), "res": args.res, "tau": args.tau,
+        "nLon": len(oil["lon_edges"]) - 1, "nLat": len(oil["lat_edges"]) - 1,
+        "nCells": len(oil["cell_flat"]), "nStates": oil["P"].shape[0],
+        "cellFlat": oil["cell_flat"].astype(int).tolist(),
+        "edges": EXIT_LABELS[:STRANDED].tolist(), "coasts": COAST_LABELS.tolist(), "coastNames": COAST_NAMES.tolist(),
+        "disagreeTvd": DISAGREE_TVD, "minDrifters": MIN_DRIFTERS,
         "massPersistent": OIL_MASS_CASES["heavy_fuel"]["persistent"], "massTau": OIL_MASS_CASES["heavy_fuel"]["tau_days"],
-        "alphaOil": float(op["alpha_oil"]),
-        "alphaUndrogued": float(op["alpha_undrogued"]), "alphaAdded": float(op["alpha_added"]),
-        "years": op["years"].astype(int).tolist(),
+        "alphaOil": float(oil["alpha_oil"]),
+        "alphaUndrogued": float(oil["alpha_undrogued"]), "alphaAdded": float(oil["alpha_added"]),
+        "years": oil["years"].astype(int).tolist(),
         "maxSteps": int(round(HORIZONS[-1] / args.tau)),
-        **atlas,
+        "matrices": {name: matrix_data(ops[name], atlas_intervals(atlas, name, args.tau), tvd if name == "oil" else None)
+                     for name in MATRICES},
         "points": points.to_dict("records"), "land": land,
     }
 
@@ -133,15 +148,16 @@ def main(argv=None):
     tag = setting_tag(args.res, args.tau, args.box)
     out = f"figures/agulhas_oil_explorer_{tag}.html"
 
-    op = load_operator(operator_path("oil_coast", args.res, args.tau, args.box))
-    print(f"Oil matrix: {op['P'].shape[0]} states, {np.count_nonzero(op['P']):,} non-zero entries")
-    tvd = method_tvd(args, len(op["cell_flat"]))
+    ops = {name: load_operator(operator_path(f"{name}_coast", args.res, args.tau, args.box)) for name in MATRICES}
+    for name, op in ops.items():
+        print(f"{name.capitalize()} matrix: {op['P'].shape[0]} states, {np.count_nonzero(op['P']):,} non-zero entries")
+    tvd = method_tvd(args, len(ops["oil"]["cell_flat"]))
     print(f"Cells where oil and its check differ by TVD > {DISAGREE_TVD} at 30 days: {(tvd > DISAGREE_TVD).sum()}")
-    atlas = atlas_intervals(f"data/risk_atlas_{tag}.csv", args.tau)
+    atlas = pd.read_csv(f"data/risk_atlas_{tag}.csv", low_memory=False)
     points = pd.read_csv(release_points_path(args.box))[["kind", "name", "lon", "lat"]]
     land = coastline(args.box)
 
-    write_page(page_data(op, args, tvd, atlas, points, land), out)
+    write_page(page_data(ops, args, tvd, atlas, points, land), out)
     print(f"Coastline: {len(land)} polygons. Page saved → {out} ({os.path.getsize(out) / 1e6:.2f} MB)")
 
 

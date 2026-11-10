@@ -193,7 +193,7 @@ The core pipeline also runs on the Gulf Stream, box 80–40°W, 25–45°N, with
 
 ## Oil explorer
 
-`agulhas/tools/oil_explorer.py` builds a single web page, `figures/agulhas_oil_explorer_….html`: click anywhere in R and play the year to see where oil released there goes, in the matrix's own 3.5-day steps. It shows where the oil drifts and how much heavy fuel oil is left (85% of its mass stays), and reports the drifters behind the cell, the atlas's 95% intervals at 1 week, 1 month and 1 year, the coast that receives the stranding and whether the result depends on the method. The page does the matrix steps itself, so it needs no server. Like the worked example, it only reads pipeline outputs. The time axis is days since release under average conditions, so it is not a forecast.
+`agulhas/tools/oil_explorer.py` builds a single web page, `figures/agulhas_oil_explorer_….html`: click anywhere in R and play the year to see where oil released there goes, in the matrix's own 3.5-day steps. A toggle switches between oil and the undrogued and drogued drifter matrices, so the same release can be compared with a floating object and with the current at 15 m. For oil it shows where the oil drifts and how much heavy fuel oil is left (85% of its mass stays). For each matrix it reports the drifters behind the cell, the atlas's 95% intervals at 1 week, 1 month and 1 year, the coast that receives the stranding and whether the result depends on the method. The page does the matrix steps itself, so it needs no server. Like the worked example, it only reads pipeline outputs. The time axis is days since release under average conditions, so it is not a forecast.
 
 ```bash
 python -m agulhas oil_explorer
