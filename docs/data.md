@@ -24,7 +24,7 @@ The SHA-256 of the subsets behind the reported results is in the README. Another
 
 ### ERA5 winds — `data/drifter_wind10m.nc`
 
-`u10`, `v10`: ERA5 10 m wind (m/s) interpolated to every observation of the subset, in the same order (`fetch_era5`). Another subset has its own file (`config.wind_paths`).
+`u10`, `v10`: ERA5 10 m wind (m/s) interpolated to every observation of the subset, in the same order (`fetch_era5`). The attribute `subset_fingerprint` is the `Drifters.fingerprint` of the subset the file was built for; `oil_wind` stops if it differs from the subset in use, since winds are matched to positions by order alone. The file for the Agulhas subset is published as the `data-v1` release (`config.WIND_URL`, checked against `config.WIND_SHA256`). Another subset has its own file (`config.wind_paths`).
 
 ### Shipping density — `data/shipping/shipdensity_commercial.zip`
 

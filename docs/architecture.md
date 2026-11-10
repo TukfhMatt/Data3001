@@ -27,13 +27,14 @@ Steps hold only what is particular to them. Everything two steps would otherwise
 | Module | What it holds |
 |---|---|
 | `config.py` | Defaults (box, grids, lag, `MIN_DRIFTERS`, oil windage range), the command-line options every step takes (`parse_args`), and every file name: `operator_path`, `release_points_path`, `wind_paths`, `setting_tag` and the other tags. |
-| `drifters.py` | `Drifters(path)`: the GDP subset, loading each array the first time a step asks for it; `in_box` with half-open edges. |
+| `drifters.py` | `Drifters(path)`: the GDP subset, loading each array the first time a step asks for it, and its `fingerprint` (SHA-256 of the positions and times, which a wind file must match); `in_box` with half-open edges. |
 | `grid.py` | `Grid(box, res)`: cell edges and centres (a partial last cell is clipped to the box), and the cell index of any position. |
 | `moves.py` | `MoveSet(drifters, box, res, tau)`: every one-step move from the box on one grid and lag, filtered by drogue type, turned into matrix states, or grouped per drifter for a bootstrap and checked against a saved matrix (`counts_for`). |
 | `transport.py` | Working with saved matrices (`load_operator`, `release`, `propagate`, `to_grid`, `absorption`, `stranding_chain`, `reliable`, `coastal_states`) and the helpers every matrix build shares (`strand_times`, `move_indices`, `same_drogue`, `transition_states`, `row_normalise`, `drifter_counts`, `resampled_counts`, `load_coast_counts`). Named coasts of the Agulhas area (`COAST_LABELS`, `coast_of`). |
 | `plotting.py` | The headless backend, cartopy with a plain-matplotlib fallback (`MAP_KW`, `TRANSFORM_KW`), `map_axes`, `add_gridlines`, `save_figure` (150 dpi) and the drogue-type colours. |
 | `shipping.py` | The shipping density raster: `read_window` reads one box straight from the zip, `blocks` groups its pixels into grid cells. |
 | `stats.py` | `haversine_km` and `interval` (the 95% interval of resampled values). |
+| `download.py` | `download(url, path, checksum)`: to a temporary name, kept only once finished and, with a checksum, only if its SHA-256 matches. Used for the shipping zip and the published ERA5 winds. |
 | `opendrift_common.py` | What the OpenDrift comparison steps share: their settings, one `OceanDrift` run (`simulate`), and `classify`, which sorts particles into the matrix's states. OpenDrift is imported only inside `simulate`, so the rest also works in the main environment. |
 | `pipeline.py` | The step list and the `python -m agulhas` command (`all`, `list`, one step by name). |
 
