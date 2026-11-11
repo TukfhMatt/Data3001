@@ -26,7 +26,7 @@ whole drifters (none for the oil check):
   • material-days in each coast's near-shore cells over the first 30 days (per
     pooled coastal segment from coastal_pooling, without intervals, in a separate table)
   • each route's share of the stranding on each coast
-  • for oil, the mass stranded on each coast for heavy fuel oil and for fast loss (config.oil_mass_left)
+  • for oil, the heavy fuel oil mass stranded on each coast, for each residue time (config.oil_mass_left)
 
 Needs the coast operators and counts from coastal_stranding, and the segments
 from coastal_pooling.
@@ -41,7 +41,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
-from agulhas.config import OIL_MASS_CASES, grid_shape, oil_mass_left, operator_path, parse_args, setting_tag
+from agulhas.config import OIL_RESIDUE_DAYS, grid_shape, oil_mass_left, operator_path, parse_args, setting_tag
 from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
 from agulhas.shipping import blocks, read_window
 from agulhas.stats import interval
@@ -178,7 +178,7 @@ def load_nearshore(path, geo):
 
 def exposure(P, weights, near_cells, tau, oil=False):
     """Stranding, exits, days to strand, near-shore material-days and (with
-    oil=True) stranded oil mass for each case of OIL_MASS_CASES, per release; and each route's share of each
+    oil=True) stranded oil mass for each residue time of OIL_RESIDUE_DAYS, per release; and each route's share of each
     coast's stranding. weights are (W, route shares)."""
     W, shares = weights
     n_cells = W.shape[1]
@@ -193,7 +193,7 @@ def exposure(P, weights, near_cells, tau, oil=False):
     p[:, :n_cells] = W
     prev = p[:, coast_cols].copy()
     near = np.zeros((len(W), n_cells))
-    mass = {case: np.zeros((len(W), len(COAST_LABELS))) for case in OIL_MASS_CASES}
+    mass = {key: np.zeros((len(W), len(COAST_LABELS))) for key in OIL_RESIDUE_DAYS}
     out = {"eventual": wf[:, STRANDED:], "exit": wf[:, :STRANDED], "days": days}
     for step in range(1, steps[max(HORIZONS)] + 1):
         p = p @ P
@@ -201,8 +201,8 @@ def exposure(P, weights, near_cells, tau, oil=False):
             near += p[:, :n_cells] * tau
         new = p[:, coast_cols]
         if oil:
-            for case in OIL_MASS_CASES:
-                mass[case] += (new - prev) * oil_mass_left(step * tau, case)
+            for key, residue in OIL_RESIDUE_DAYS.items():
+                mass[key] += (new - prev) * oil_mass_left(step * tau, residue)
         prev = new.copy()
         for d, k in steps.items():
             if step == k:
@@ -211,7 +211,7 @@ def exposure(P, weights, near_cells, tau, oil=False):
     out["nearshore"] = near @ near_cells.in_coast
     out["segments"] = near @ near_cells.in_segment
     if oil:
-        out["mass"], out["mass_fast"] = mass["heavy_fuel"], mass["fast_loss"]
+        out.update(mass)
     # Each route's share of the traffic-weighted stranding on each coast
     by_route = shares[:, None] * wf[1:, STRANDED:]
     with np.errstate(invalid="ignore", divide="ignore"):
@@ -268,9 +268,8 @@ def rows_for(name, weighting, out, ci):
             add("in_R", d, "R", release, out[f"in_R_{d}"][r], *bounds(f"in_R_{d}", r))
         for k, coast in enumerate(COAST_LABELS):
             add("nearshore_days", NEARSHORE_DAYS, coast, release, out["nearshore"][r, k], *bounds("nearshore", r, k))
-            if "mass" in out:
-                add("mass_stranded", "eventual", coast, release, out["mass"][r, k], *bounds("mass", r, k))
-                add("mass_stranded_fast", "eventual", coast, release, out["mass_fast"][r, k], *bounds("mass_fast", r, k))
+            for key in OIL_RESIDUE_DAYS if "mass" in out else []:
+                add("mass_stranded" + key[len("mass"):], "eventual", coast, release, out[key][r, k], *bounds(key, r, k))
     for k, coast in enumerate(COAST_LABELS):
         for r, route in enumerate(ROUTES):
             add("source_share", "eventual", coast, route, out["source"][r, k], *bounds("source", r, k))
@@ -411,8 +410,8 @@ def print_oil_and_sensitivity(full, sens):
     print(pd.DataFrame({name: [f"{full[name]['nearshore'][0, k]:.2f}" for k in range(len(COAST_LABELS))]
                         for name in MATRICES}, index=COAST_LABELS).to_string())
 
-    for key, label in [("mass", "heavy fuel oil"), ("mass_fast", "fast loss, 14 d")]:
-        print(f"\nOil mass stranded, {label}, all traffic: "
+    for key, residue in OIL_RESIDUE_DAYS.items():
+        print(f"\nHeavy fuel oil mass stranded, residue lost over {residue:g} d, all traffic: "
               + ", ".join(f"{c} {m:.2%}" for c, m in zip(COAST_LABELS, full["oil"][key][0])))
 
     print("\nSensitivity: all-traffic eventual stranding with lane-pixel weights and without moved weight")

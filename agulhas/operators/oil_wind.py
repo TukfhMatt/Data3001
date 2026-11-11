@@ -45,7 +45,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import xarray as xr
 
-from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_MASS_CASES, OIL_WINDAGE_RANGE, oil_mass_left, operator_path,
+from agulhas.config import (DISAGREE_TVD, MIN_DRIFTERS, OIL_RESIDUE_DAYS, OIL_WINDAGE_RANGE, oil_mass_left, operator_path,
                             parse_args, region_prefix, release_points_path, setting_tag, wind_paths)
 from agulhas.drifters import Drifters
 from agulhas.moves import MoveSet
@@ -377,8 +377,9 @@ def print_intervals(cmp_):
         print(f"{r['name'][:27]:<28}" + "".join(f"{ci(r, k, m):>22}" for m in ["stranded_30d", "inR_365d"]
                                               for k in ["undrogued", "oil"])
               + f"{r.grounded_drifters_in_cell:>9}")
-    for case in OIL_MASS_CASES:
-        print(f"Oil mass left, {case}: " + ", ".join(f"{d} d {oil_mass_left(d, case):.1%}" for d in HORIZONS))
+    for days in OIL_RESIDUE_DAYS.values():
+        print(f"Heavy fuel oil mass left, residue lost over {days:g} d: "
+              + ", ".join(f"{d} d {oil_mass_left(d, days):.1%}" for d in HORIZONS))
 
 
 # ── Map: 30-day distribution from one release point for the three matrices ───

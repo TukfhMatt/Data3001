@@ -149,7 +149,9 @@ for (const [name, m] of Object.entries(DATA.matrices)) {
   MATRICES[name] = { ...m, rowStart: new Uint32Array(bytes(m.rowStart)), col: new Uint16Array(bytes(m.col)), val: new Float64Array(bytes(m.val)) };
 }
 let cur = MATRICES.oil;
-const N = DATA.nCells, NS = DATA.nStates, TAU = DATA.tau, MAX = DATA.maxSteps, KEEP = DATA.massPersistent, MASS_TAU = DATA.massTau;
+const N = DATA.nCells, NS = DATA.nStates, TAU = DATA.tau, MAX = DATA.maxSteps;
+const EVAP = DATA.evaporates, EVAP_DAYS = DATA.evaporationDays, RESIDUE_DAYS = DATA.residueDays;
+const massLeft = t => EVAP * Math.exp(-t / EVAP_DAYS) + (1 - EVAP) * Math.exp(-t / RESIDUE_DAYS);
 const NE = DATA.edges.length, NC = DATA.coasts.length;
 const [LON0, LON1, LAT0, LAT1] = DATA.box;
 const stateOfFlat = new Map(DATA.cellFlat.map((f, s) => [f, s]));
@@ -166,7 +168,7 @@ function step(p) {
   }
   return q;
 }
-// Every step's distribution, with the heavy fuel oil mass left, KEEP + (1 − KEEP)·exp(−t / MASS_TAU). Mass
+// Every step's distribution, with the heavy fuel oil mass left (massLeft, as config.oil_mass_left). Mass
 // that strands or leaves R keeps what it had when it got there, as in 24.
 function trajectory(state) {
   const dist = [], mass = [];
@@ -176,7 +178,7 @@ function trajectory(state) {
   const absorbed = new Float64Array(NE + NC);
   mass.push({ absorbed: absorbed.slice(), decay: 1 });
   for (let s = 1; s <= MAX; s++) {
-    const q = step(p), decay = KEEP + (1 - KEEP) * Math.exp(-s * TAU / MASS_TAU);
+    const q = step(p), decay = massLeft(s * TAU);
     for (let k = 0; k < NE + NC; k++) absorbed[k] += (q[N + k] - p[N + k]) * decay;
     dist.push(q);
     mass.push({ absorbed: absorbed.slice(), decay });
@@ -372,7 +374,7 @@ function drawPanel() {
   }).join("");
   el("int-head").textContent = state.view === "drift" ? "95% interval" : "";
   el("int-note").textContent = state.view === "mass"
-    ? `Heavy fuel oil left: ${Math.round(100 * KEEP)}% stays and the rest decays with a ${MASS_TAU}-day time scale (evaporation only). Oil that strands or leaves the box counts at the mass it had when it got there.`
+    ? `Heavy fuel oil left: ${Math.round(100 * EVAP)}% evaporates within days, and the rest floats as emulsion and tar that is lost with a ${RESIDUE_DAYS}-day time scale (${DATA.residueRange[0]}–${DATA.residueRange[1]} days in the report's range). Oil that strands or leaves the box counts at the mass it had when it got there.`
     : "Intervals appear at the 1 week, 1 month and 1 year buttons only (days 7, 31.5 and 364, the nearest whole steps).";
   // Coasts
   const later = state.view === "drift" ? DATA.coasts.map(c => cur.eventual[c].est[s] / 1000) : summary(state.tr, MAX, "mass").coast;
@@ -538,7 +540,7 @@ function describe() {
 el("foot").textContent = `Read this as a likely spread under average conditions, not a forecast: the time axis is days since release, with no season, storm or wind shift in it. `
   + `Each step is ${TAU} days on a ${DATA.res}° grid (about 100 km), and repeated steps spread material more smoothly than a real slick would. Material that leaves the box is no longer tracked and cannot come back. `
   + `Oil is the headline; the drifter matrices are the two it is compared with: drogued drifters carry little wind and undrogued drifters about ${(DATA.alphaUndrogued * 100).toFixed(1)}%, and each counts only its own drifters, so a cell can be reliable in one and thin in another. `
-  + `For oil, "Where it drifts" follows it without weathering; "Oil left after decay" is for heavy fuel oil, which keeps ${Math.round(100 * KEEP)}% of its mass. `
+  + `For oil, "Where it drifts" follows it without weathering; "Oil left after decay" is for heavy fuel oil: ${Math.round(100 * EVAP)}% evaporates, and the floating residue is lost over months (a ${RESIDUE_DAYS}-day time scale, from how long tar stays at sea). `
   + `Data: NOAA Global Drifter Program and ERA5 winds. Results are weakest close to the coast, and the 95% intervals come from resampling whole drifters and are not corrected for the number of comparisons.`;
 
 state.tr = trajectory(state.cell);
