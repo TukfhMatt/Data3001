@@ -30,11 +30,12 @@ TAU_DAYS = 3.5
 MIN_DRIFTERS = 10                            # rows with fewer distinct drifters are flagged
 OIL_WINDAGE_RANGE = {"oil_3pct": 0.03, "oil": 0.035, "oil_4pct": 0.04}   # oil matrices, by share of the wind
 DISAGREE_TVD = 0.3                           # oil against its check at 30 d above this depends on the method
-# Oil mass left t days after release, for heavy (bunker) fuel oil: at most about 15% evaporates within days
-# (Mackay et al. 1980, 85% non-volatile at API 15), and the rest floats as emulsion and tar that is lost over
-# months. Floating tar stays at sea for 1–4 months (Sleeter and Butler 1982), so the residue decays with a
-# 60-day e-folding time, bounded by 30 and 120 days. The residue time decides the mass reaching a coast,
-# since half of the year's stranding comes after about 8 weeks. No loss at all is the share of parcels that strand.
+# Oil mass left t days after release, for heavy (bunker) fuel oil: about 15% evaporates within days (Mackay
+# et al. 1980, Table 3.1: 14% of the mass of their API 15 oil is decane or lighter), and the rest floats as
+# emulsion and tar that is lost over months. Floating tar stays at sea for 1–4 months (Sleeter and Butler 1982),
+# so the residue decays with a 60-day e-folding time, bounded by 30 and 120 days. The residue time decides the
+# mass reaching a coast, since half of the year's stranding comes after about 8 weeks. No loss at all is the
+# share of parcels that strand.
 OIL_EVAPORATES = 0.15
 OIL_EVAPORATION_DAYS = 2.0
 OIL_RESIDUE_DAYS = {"mass_30d": 30.0, "mass": 60.0, "mass_120d": 120.0}   # "mass" is the headline
