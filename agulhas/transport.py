@@ -30,6 +30,7 @@ from agulhas.config import DROGUE_TYPES, operator_path
 EXIT_LABELS = np.array(["W", "E", "S", "N", "stranded"])
 STRANDED = len(EXIT_LABELS) - 1          # offset of the stranded state after the ocean cells
 STRAND_MATCH_S = 86400                   # last subset obs within this of GDP's end date
+MIN_STRANDING = 1e-9                     # below this share stranding, days to strand is left empty
 
 # Named coasts of the default box R, for operators whose stranded state is
 # split by where drifters ran aground (coastal_stranding). Each has ≥ 13 grounded drifters.
@@ -186,6 +187,15 @@ def stranding_chain(P, n, strand_from):
     visits = np.zeros(n)
     visits[k] = np.linalg.solve(A, b[k])
     return fate, visits
+
+
+def days_to_strand(visits, stranded, tau):
+    """Expected days to strand among material that strands: visits from
+    stranding_chain over the share that strands (both may be weighted sums
+    over releases). Empty (NaN) where less than MIN_STRANDING strands, since
+    there the ratio is one of rounding errors and differs between machines."""
+    with np.errstate(invalid="ignore", divide="ignore"):
+        return np.where(stranded > MIN_STRANDING, visits / stranded * tau, np.nan)
 
 
 # ── Building helpers ─────────────────────────────────────────────────────────

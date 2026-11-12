@@ -22,8 +22,9 @@ from matplotlib.colors import PowerNorm
 from agulhas.config import grid_shape, operator_path, parse_args, setting_tag
 from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
 from agulhas.stats import interval
-from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, cell_centres, check_coast_box, load_coast_counts,
-                               load_operator, reliable, resampled_counts, row_normalise, stranding_chain, to_grid)
+from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, cell_centres, check_coast_box, days_to_strand,
+                               load_coast_counts, load_operator, reliable, resampled_counts, row_normalise,
+                               stranding_chain, to_grid)
 
 N_BOOT = 1000
 SEED = 0
@@ -60,8 +61,7 @@ def outcomes(P, n_cells, steps, tau):
     eventual[:, 1:-1] = fate
     b = fate[:, STRANDED:].sum(axis=1)
     eventual[:, -1] = b
-    with np.errstate(invalid="ignore", divide="ignore"):
-        days = np.where(b > 0, visits / b * tau, np.nan).astype(np.float32)
+    days = days_to_strand(visits, b, tau).astype(np.float32)
     return by_horizon, eventual, days
 
 
