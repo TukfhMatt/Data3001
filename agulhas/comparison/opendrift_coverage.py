@@ -1,6 +1,6 @@
 """
 Agulhas Region — Does OpenDrift Fall Inside the Matrix's Intervals
-Added after opendrift_compare's result; its rule is in PLAN.md and was fixed
+Added after opendrift_compare's result; its rule is in docs/opendrift_plan.md and was fixed
 before this ran. For each release point, horizon (day 7 and 31.5) and outcome
 (still in R, stranded, exit W, E, S, N), counts how often OpenDrift's mean share
 lies inside the matrix's 95% bootstrap interval from risk_atlas. Outcomes where
