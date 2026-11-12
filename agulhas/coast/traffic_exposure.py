@@ -46,8 +46,8 @@ from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
 from agulhas.shipping import blocks, read_window
 from agulhas.stats import interval
 from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, cell_centres, check_coast_box, coast_of,
-                               load_coast_counts, load_operator, reliable, resampled_counts, row_normalise,
-                               stranding_chain, to_grid)
+                               days_to_strand, load_coast_counts, load_operator, reliable, resampled_counts,
+                               row_normalise, stranding_chain, to_grid)
 
 LANE_MIN = 1e3                  # pixels at or above this are in the raster's high mode
 CAP_PERCENTILE = 99
@@ -187,8 +187,7 @@ def exposure(P, weights, near_cells, tau, oil=False):
     fate, visits = stranding_chain(P, n_cells, STRANDED)
     wf = W @ fate
     b = wf[:, STRANDED:].sum(axis=1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        days = np.where(b > 0, W @ visits / b * tau, np.nan)
+    days = days_to_strand(W @ visits, b, tau)
     p = np.zeros((len(W), P.shape[0]))
     p[:, :n_cells] = W
     prev = p[:, coast_cols].copy()

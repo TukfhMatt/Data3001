@@ -40,8 +40,8 @@ from agulhas.moves import MoveSet
 from agulhas.plotting import MAP_KW, TRANSFORM_KW, map_axes, save_figure
 from agulhas.stats import interval
 from agulhas.transport import (COAST_COLORS, COAST_LABELS, COAST_NAMES, EXIT_LABELS, STRANDED, cell_centres,
-                               check_coast_box, coast_of, last_obs_index, load_operator, reliable, resampled_counts,
-                               row_normalise, state_of, stranding_chain, to_grid)
+                               check_coast_box, coast_of, days_to_strand, last_obs_index, load_operator, reliable,
+                               resampled_counts, row_normalise, state_of, stranding_chain, to_grid)
 
 N_BOOT = 1000
 SEED = 0
@@ -160,8 +160,7 @@ def strand_summary(P, layout, starts, tau, rows=None):
     stranding per coast within each horizon for the release points."""
     fate, visits = stranding_chain(P, layout.n_cells, STRANDED)
     b = fate[:, STRANDED:].sum(axis=1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        days = np.where(b > 0, visits / b * tau, np.nan)
+    days = days_to_strand(visits, b, tau)
     steps = {d: int(round(d / tau)) for d in HORIZONS}
     p = np.zeros((len(starts), layout.n_states))
     p[np.arange(len(starts)), starts] = 1.0

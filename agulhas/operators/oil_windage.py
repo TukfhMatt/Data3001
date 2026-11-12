@@ -29,9 +29,9 @@ from agulhas.config import (DISAGREE_TVD, OIL_RESIDUE_DAYS, OIL_WINDAGE_RANGE, g
                             parse_args, release_points_path, setting_tag)
 from agulhas.plotting import save_figure
 from agulhas.stats import interval
-from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, check_coast_box, load_coast_counts,
-                               load_operator, propagate, release, resampled_counts, row_normalise, state_of,
-                               stranding_chain)
+from agulhas.transport import (COAST_LABELS, EXIT_LABELS, STRANDED, check_coast_box, days_to_strand,
+                               load_coast_counts, load_operator, propagate, release, resampled_counts, row_normalise,
+                               state_of, stranding_chain)
 
 N_BOOT = 1000
 SEED = 0
@@ -73,8 +73,7 @@ def outcomes(P, W, n_cells, tau):
     fate, visits = stranding_chain(P, n_cells, STRANDED)
     wf = W @ fate
     total = wf[:, STRANDED:].sum(axis=1)
-    with np.errstate(invalid="ignore", divide="ignore"):
-        days = np.where(total > 0, W @ visits / total * tau, np.nan)
+    days = days_to_strand(W @ visits, total, tau)
     p = np.zeros((len(W), P.shape[0]))
     p[:, :n_cells] = W
     prev = p[:, n_cells + STRANDED:].copy()

@@ -85,6 +85,12 @@ def test_stranding_chain_leaves_closed_cells_out():
     assert visits[0] == 2 and visits[2] == 0
 
 
+def test_days_to_strand_is_empty_below_min_stranding():
+    # 2 steps to strand where half strands; rounding-level stranding gets no time
+    days = tr.days_to_strand(np.array([1.0, 2e-17, 0.0]), np.array([0.5, 1e-17, 0.0]), tau=3.5)
+    assert days[0] == 7.0
+    assert np.isnan(days[1:]).all()
+
 def test_coast_of_splits_at_the_stated_lines():
     lon = [19.9, 20.0, 33.0, 36.0, 44.0, 47.0]
     lat = [-34.0, -34.0, -25.0, -18.0, -22.0, -18.0]
