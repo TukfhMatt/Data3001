@@ -108,6 +108,7 @@ Each step is one module with a `main()`, named as its step: `python -m agulhas b
 | [docs/architecture.md](docs/architecture.md) | How the package is organised, the shared modules, and the shape every step follows |
 | [docs/pipeline.md](docs/pipeline.md) | Every step in run order, with what it reads and writes |
 | [docs/data.md](docs/data.md) | The inputs, the matrix files and the files steps pass to each other |
+| [docs/opendrift_plan.md](docs/opendrift_plan.md) | The OpenDrift comparison's settings and agreement rules, written before any of its results were seen |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Setup, checks before committing, adding a step, changing code without changing results |
 | [Research.md](Research.md) | The research plan and the results step by step |
 
@@ -201,7 +202,7 @@ python -m agulhas oil_explorer
 
 ## OpenDrift comparison
 
-The matrix is also compared with OpenDrift, an open-source particle model used for spill work. `OceanDrift` runs on the real currents and winds of each date (GLORYS12 at 1/12° and ERA5), with oil at 3.5% of the wind and no weathering. The release-point and Treasure runs show whether the matrix still gets the broad risks right next to a model that knows each date's conditions, and how much of any gap the matrix method itself causes; they cannot show which is closer to the truth. The held-out drifters can, since both forecast the same real drifters. These steps are not part of a full run, because OpenDrift needs Python 3.10 or newer:
+The matrix is also compared with OpenDrift, an open-source particle model used for spill work. `OceanDrift` runs on the real currents and winds of each date (GLORYS12 at 1/12° and ERA5), with oil at 3.5% of the wind and no weathering. The release-point and Treasure runs show whether the matrix still gets the broad risks right next to a model that knows each date's conditions, and how much of any gap the matrix method itself causes; they cannot show which is closer to the truth. The held-out drifters can, since both forecast the same real drifters. The settings and the rules for agreement were fixed before any OpenDrift result was seen, in [docs/opendrift_plan.md](docs/opendrift_plan.md). These steps are not part of a full run, because OpenDrift needs Python 3.10 or newer:
 
 ```bash
 python3.12 -m venv .venv-opendrift
