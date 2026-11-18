@@ -21,14 +21,18 @@ OIL_WIND = 0.035                              # no Stokes field and no drifter w
 N_COASTS = 6
 
 
-def merged_wind(year, next_january=True):
-    """One ERA5 file for a year's runs, with the names and attributes OpenDrift's reader expects."""
+def merged_wind(year, next_january=True, next_year=False):
+    """One ERA5 file for a year's runs, with the names and attributes OpenDrift's reader expects.
+    next_year joins the whole of the following year, for runs that last up to a year."""
     import xarray as xr
 
-    out = f"{FORCING}/era5_merged_{year}{'' if next_january else '_only'}.nc"
+    out = f"{FORCING}/era5_merged_{year}{'_2y' if next_year else '' if next_january else '_only'}.nc"
     if os.path.exists(out):
         return out
-    parts = [xr.open_dataset(f"{FORCING}/era5_{y}.nc").load() for y in ([year, f"{year + 1}01"] if next_january else [year])]
+    names = [year, year + 1] if next_year else [year, f"{year + 1}01"] if next_january else [year]
+    parts = [xr.open_dataset(f"{FORCING}/era5_{y}.nc").load() for y in names]
+    parts = [p[["u10", "v10"]].drop_vars([c for c in p.coords if c not in ("valid_time", "latitude", "longitude")]) for p in parts]
+    parts = [p.assign_coords(latitude=p.latitude.astype("float64"), longitude=p.longitude.astype("float64")) for p in parts]
     ds = xr.concat(parts, dim="valid_time").rename({"valid_time": "time", "longitude": "lon", "latitude": "lat"})
     ds = ds[["u10", "v10"]].sortby("lat").sortby("time")
     ds = ds.drop_vars([c for c in ds.coords if c not in ("time", "lon", "lat")])
@@ -41,17 +45,19 @@ def merged_wind(year, next_january=True):
     return out
 
 
-def simulate(start, lons, lats, markers, hours, seed, wind_file=None, release_hours=0, times=None, wind=OIL_WIND, max_age_hours=None, diffusivity=DIFFUSIVITY):
+def simulate(start, lons, lats, markers, hours, seed, wind_file=None, release_hours=0, times=None, wind=OIL_WIND, max_age_hours=None, diffusivity=DIFFUSIVITY, next_year=False):
     """Run OceanDrift with hourly output. Returns hourly lon and lat (particles, hours + 1), empty before
     a particle is released and after it stops, with each particle's marker, whether it stranded, and its last hour.
-    times gives each particle its own release time; max_age_hours stops each particle that long after its release."""
+    times gives each particle its own release time; max_age_hours stops each particle that long after its release;
+    next_year adds the following year's currents and wind, for runs that last up to a year."""
     from opendrift.models.oceandrift import OceanDrift
     from opendrift.readers import reader_netCDF_CF_generic
 
     np.random.seed(seed)
     m = OceanDrift(loglevel=50)
-    m.add_reader([reader_netCDF_CF_generic.Reader(f"{FORCING}/glorys_{start.year}.nc"),
-                  reader_netCDF_CF_generic.Reader(wind_file or merged_wind(start.year))])
+    currents = [f"{FORCING}/glorys_{y}.nc" for y in ([start.year, start.year + 1] if next_year else [start.year])]
+    m.add_reader([reader_netCDF_CF_generic.Reader(f) for f in currents]
+                 + [reader_netCDF_CF_generic.Reader(wind_file or merged_wind(start.year, next_year=next_year))])
     m.set_config("general:coastline_action", "stranding")
     m.set_config("general:use_auto_landmask", True)
     m.set_config("drift:advection_scheme", "runge-kutta")

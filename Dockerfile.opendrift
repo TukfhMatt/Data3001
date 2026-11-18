@@ -3,7 +3,8 @@
 #   docker build --platform linux/amd64 -f Dockerfile.opendrift -t agulhas-opendrift .
 #   docker run --rm --platform linux/amd64 -v "$PWD/data:/app/data" -v "$PWD/figures:/app/figures" \
 #       agulhas-opendrift python -m agulhas opendrift_compare
-# opendrift_forcing also needs ~/.copernicusmarine-credentials and ~/.cdsapirc mounted under /root.
+# opendrift_forcing downloads from Zenodo and needs no login; only --rebuild needs ~/.copernicusmarine-credentials
+# and ~/.cdsapirc mounted under /root.
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \

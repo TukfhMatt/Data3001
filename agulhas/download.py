@@ -1,9 +1,10 @@
 """
-Downloads the pipeline makes: the shipping zip and the published ERA5 winds. Each
-file goes to a temporary name first, so an interrupted download never looks like
-the finished file, and is kept only if its checksum, when one is given, matches.
-A dropped connection is retried from where it stopped (both servers accept byte
-ranges), and a partial file left by an earlier run is continued, not restarted.
+Downloads the pipeline makes: the shipping zip, the published ERA5 winds and the
+OpenDrift forcing. Each file goes to a temporary name first, so an interrupted
+download never looks like the finished file, and is kept only if its checksum, when
+one is given, matches. A dropped connection is retried from where it stopped (all
+servers accept byte ranges), and the download stops after MAX_TRIES tries in a row
+that add nothing. A partial file left by an earlier run is continued, not restarted.
 """
 
 import hashlib
@@ -43,16 +44,19 @@ def download(url, path, checksum=None):
     does not match is deleted and the run stops."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     part = path + ".part"
-    for attempt in range(1, MAX_TRIES + 1):
+    attempt, last = 0, -1
+    while True:
         try:
             fetch_part(url, part)
             break
         except requests.RequestException as e:
+            size = os.path.getsize(part) if os.path.exists(part) else 0
+            attempt = attempt + 1 if size <= last else 1       # only tries that bring nothing new count
+            last = size
             if attempt == MAX_TRIES:
-                raise SystemExit(f"Downloading {url} failed {MAX_TRIES} times ({type(e).__name__}). "
+                raise SystemExit(f"Downloading {url} failed {MAX_TRIES} times in a row ({type(e).__name__}). "
                                  "Run the same command again to continue from where it stopped.")
-            have = os.path.getsize(part) / 1e6 if os.path.exists(part) else 0
-            print(f"Download interrupted ({type(e).__name__}); retrying from {have:.0f} MB.", flush=True)
+            print(f"Download interrupted ({type(e).__name__}); retrying from {size / 1e6:.0f} MB.", flush=True)
             time.sleep(WAIT_SECONDS * attempt)
     if checksum and sha256(part) != checksum:
         os.remove(part)

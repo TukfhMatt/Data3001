@@ -41,9 +41,9 @@ N_CELL = 20
 DIR = f"{OUT}/drifters"
 
 
-def folder(diffusivity=DIFFUSIVITY):
+def folder(diffusivity=DIFFUSIVITY, base=DIR):
     """Where the forecasts at a horizontal diffusivity are kept; the starts are shared."""
-    return DIR if diffusivity == DIFFUSIVITY else f"{DIR}_d{diffusivity:g}"
+    return base if diffusivity == DIFFUSIVITY else f"{base}_d{diffusivity:g}"
 
 
 def forcing_end(year):
@@ -69,13 +69,14 @@ def matrix_forecast(ho, P, start_state):
     return com, shares
 
 
-def fold_starts(ho, f, train_traj, test_traj):
-    """One fold's test starts in the forcing years, with their true outcomes and the fold matrix's forecasts."""
+def fold_starts(ho, f, train_traj, test_traj, end=forcing_end):
+    """One fold's test starts in the forcing years, with their true outcomes and the fold matrix's forecasts.
+    end(year) is the last time a run starting in that year may reach."""
     flag = DROGUE_TYPES["undrogued"]
     s0, state, pos = ho.test_samples(flag, test_traj)
     t0 = ho.d.t[s0].astype("datetime64[s]").astype(datetime)
     horizon = timedelta(days=max(ho.horizon_steps) * ho.tau)
-    keep = (state[:, 0] >= 0) & np.array([t.year in YEARS and t + horizon <= forcing_end(t.year) for t in t0])
+    keep = (state[:, 0] >= 0) & np.array([t.year in YEARS and t + horizon <= end(t.year) for t in t0])
     P, _ = ho.train_matrix(flag, train_traj)
     com, shares = matrix_forecast(ho, P, state[keep, 0])
     return {"fold": np.full(keep.sum(), f), "traj": ho.d.traj_idx[s0[keep]], "t0": ho.d.t[s0[keep]],
@@ -137,7 +138,7 @@ def forecasts(state, lon, lat, begin_hour, steps, lag, n_cells):
     return com, shares
 
 
-def run_batch(index, starts, land, states, args, path, diffusivity=DIFFUSIVITY):
+def run_batch(index, starts, land, states, args, path, diffusivity=DIFFUSIVITY, next_year=False):
     """One OceanDrift run for the starts at index, with each start's forecasts saved to path."""
     began = time.time()
     t0 = starts["t0"][index]
@@ -150,7 +151,7 @@ def run_batch(index, starts, land, states, args, path, diffusivity=DIFFUSIVITY):
     begin_hour = ((t0 - t0.min()) // 3600).astype(int)
     times = [begin + timedelta(hours=int(h)) for h in np.repeat(begin_hour, N_EXACT + N_CELL)]
     lon, lat, _, stranded, last = simulate(begin, x, y, np.zeros(len(x), int), int(begin_hour.max()) + span, seed,
-                                           times=times, wind=WIND, max_age_hours=span + 1, diffusivity=diffusivity)
+                                           times=times, wind=WIND, max_age_hours=span + 1, diffusivity=diffusivity, next_year=next_year)
     first = np.argmax(np.isfinite(lon), axis=1)
     if not (first == np.repeat(begin_hour, N_EXACT + N_CELL)).all():
         raise SystemExit(f"{path}: particles were not released at their starts' hours.")

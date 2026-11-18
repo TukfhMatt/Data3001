@@ -37,14 +37,14 @@ METHODS = {"matrix": "#2a78d6", "opendrift_exact": "#eb6834", "opendrift_cell": 
 
 # ── 1. Forecasts of every start ──────────────────────────────────────────────
 
-def load_forecasts(tag, diffusivity=DIFFUSIVITY):
+def load_forecasts(tag, diffusivity=DIFFUSIVITY, base=DIR):
     """The starts' truth and each method's forecast centre: positions (starts, steps, 2) by method, truth, and drifter."""
-    with np.load(f"{DIR}/starts_{tag}.npz") as f:
+    with np.load(f"{base}/starts_{tag}.npz") as f:
         starts = {k: f[k] for k in f.files}
     n, steps = len(starts["traj"]), len(starts["steps"])
     exact, cell = np.full((n, steps, 2), np.nan), np.full((n, steps, 2), np.nan)
     done = np.zeros(n, bool)
-    for path in sorted(glob.glob(f"{folder(diffusivity)}/20*_?.npz")):
+    for path in sorted(glob.glob(f"{folder(diffusivity, base)}/20*_?.npz")):
         with np.load(path) as f:
             exact[f["index"]], cell[f["index"]] = f["com"][0], f["com"][1]
             done[f["index"]] = True

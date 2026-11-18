@@ -82,12 +82,14 @@ TOOLS = [
     Step("oil_explorer", "tools.oil_explorer"),
     Step("opendrift_forcing", "comparison.opendrift_forcing"),
     Step("opendrift_points", "comparison.opendrift_points"),
+    Step("opendrift_year", "comparison.opendrift_year"),
     Step("opendrift_treasure", "comparison.opendrift_treasure"),
     Step("opendrift_compare", "comparison.opendrift_compare"),
     Step("opendrift_moves", "comparison.opendrift_moves"),
     Step("opendrift_checks", "comparison.opendrift_checks"),
     Step("opendrift_drifters", "comparison.opendrift_drifters"),
     Step("opendrift_score", "comparison.opendrift_score"),
+    Step("opendrift_drifters_year", "comparison.opendrift_drifters_year"),
     Step("opendrift_coverage", "comparison.opendrift_coverage"),
 ]
 NEEDS_SHIPPING = {"shipping_overlay", "box_selection"}

@@ -54,7 +54,7 @@ class HeldOut:
     (the same as transition_matrix), a key per observation to find the same drifter
     a whole number of steps later, and all moves from R."""
 
-    def __init__(self, drifters, box, res, tau):
+    def __init__(self, drifters, box, res, tau, horizon_days=HORIZON_DAYS):
         self.d, self.box, self.tau = drifters, box, tau
         self.strand_t = drifters.strand_times(in_box(drifters.lon, drifters.lat, box))
         self.moves = MoveSet(drifters, box, res, tau, self.strand_t)
@@ -69,7 +69,7 @@ class HeldOut:
         self.cell_lat = np.minimum(self.grid.lat_min + (cj + 0.5) * res, self.grid.lat_max)
         self.key = drifters.traj_idx.astype(np.int64) * 10**10 + drifters.t
         self.tau_s = int(round(tau * 86400))
-        self.horizon_steps = list(range(1, int(np.ceil(HORIZON_DAYS / tau - 1e-9)) + 1))
+        self.horizon_steps = list(range(1, int(np.ceil(horizon_days / tau - 1e-9)) + 1))
 
     def exit_side(self, lo, la):
         lon_min, lon_max, lat_min, lat_max = self.box

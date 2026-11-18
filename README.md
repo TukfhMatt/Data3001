@@ -206,17 +206,20 @@ The matrix is also compared with OpenDrift, an open-source particle model used f
 ```bash
 python3.12 -m venv .venv-opendrift
 .venv-opendrift/bin/pip install -r requirements-opendrift.txt
-.venv-opendrift/bin/copernicusmarine login          # a free Copernicus Marine account
 
-.venv-opendrift/bin/python -m agulhas opendrift_forcing    # about 3 GB, into data/opendrift/forcing
+.venv-opendrift/bin/python -m agulhas opendrift_forcing    # about 5 GB from Zenodo, checked by SHA-256, into data/opendrift/forcing; no account needed
 .venv-opendrift/bin/python -m agulhas opendrift_points     # 60 start dates at the 13 release points
+.venv-opendrift/bin/python -m agulhas opendrift_year       # the same points for 364 days, 10 start dates
 .venv-opendrift/bin/python -m agulhas opendrift_treasure   # the Treasure spill; --leak-days 5 for the sensitivity
 .venv-opendrift/bin/python -m agulhas opendrift_compare    # the table and figure
 .venv-opendrift/bin/python -m agulhas opendrift_moves      # the same runs, counting moves over τ
 .venv-opendrift/bin/python -m agulhas opendrift_checks     # stranding left out, and the method's own error
 .venv-opendrift/bin/python -m agulhas opendrift_drifters   # held-out undrogued drifters, one run per half month
 python -m agulhas opendrift_score                          # their errors against the matrix's
+.venv-opendrift/bin/python -m agulhas opendrift_drifters_year   # the same drifters for 364 days, a sample of starts, scored at the end
 ```
+
+The forcing (GLORYS12 currents and ERA5 winds) is published at [doi:10.5281/zenodo.24266249](https://doi.org/10.5281/zenodo.24266249), so no login is needed. `opendrift_forcing --rebuild` requests it from the sources instead, which needs a free Copernicus Marine login (`copernicusmarine login`) and `~/.cdsapirc`.
 
 If `roaring_landmask` cannot load `liblzma` on macOS, install `xz`, or point the library at the system copy with `install_name_tool -change /opt/homebrew/opt/xz/lib/liblzma.5.dylib /usr/lib/liblzma.5.dylib` on its `.so` and re-sign it with `codesign -f -s -`.
 
@@ -307,3 +310,4 @@ At τ = 3.5 days: 1 week = 2 steps, 1 month ≈ 9 steps, 1 year ≈ 104 steps.
 - [x] OpenDrift comparison at the release points: 6 of 13 points agree under the fixed rule, all on the Madagascar and Mozambique lanes and none of the six South African points; OpenDrift strands more, and a matrix built from OpenDrift's own moves reproduces its stranding (28% against 27%), so the gap comes from the data and how stranding is counted, not the method (method error TVD 0.07–0.18)
 - [x] OpenDrift Treasure hindcast: stranding and coast fit (all oil on the Atlantic and Cape coast within 3 days); Robben Island reached, Dassen Island not
 - [x] OpenDrift against held-out drifters (36,522 undrogued starts, 370 drifters): OpenDrift is closer to where the drifter went at every horizon to 28 days; median error 48 km against the matrix's 81 km at 3.5 days, and 253 km against 280 km at 28 days. Both beat persistence from 7 days
+- [x] OpenDrift for a year: at the release points (10 start dates, 364 days) the matrix and OpenDrift get closer over time (median TVD 0.34 at day 91, 0.25 at 182, 0.16 at 364); at a year 10 of 13 points are within 0.3 and 11 of 13 have the same largest outcome, while OpenDrift still strands more (55% against 36%). Against held-out drifters (a sample of 10,286 starts, 383 drifters) OpenDrift is closer for the first five weeks and level with the matrix after that: 805 km against 782 km at 364 days, both far better than persistence (1,227 km)

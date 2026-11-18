@@ -61,10 +61,10 @@ class MatrixStates:
         self.cell_state = {int(f): s for s, f in enumerate(cells)}
         self.n_lon, _ = grid_shape(args.box, args.res)
 
-    def counts(self, lon, lat, marker, stranded, last, n_points):
+    def counts(self, lon, lat, marker, stranded, last, n_points, hours=HOURS):
         """Particles in each state, per release point and horizon."""
-        counts = np.zeros((n_points, len(HOURS), self.n_states), int)
-        for h, hour in enumerate(HOURS.values()):
+        counts = np.zeros((n_points, len(hours), self.n_states), int)
+        for h, hour in enumerate(hours.values()):
             state = classify(lon, lat, stranded, last, hour, self.cell_state, self.n_cells, self.box, self.n_lon)
             for k in range(n_points):
                 counts[k, h] = np.bincount(state[marker == k], minlength=self.n_states)
