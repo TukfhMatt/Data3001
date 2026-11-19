@@ -85,7 +85,7 @@ def plot_arrows(ax, grid, current):
     q = ax.quiver(lon, lat, np.where(slow, np.nan, u), np.where(slow, np.nan, v), color=CURRENT_COLOR, scale=13,
                   width=0.0024, headwidth=3.5, headlength=4, zorder=4, **TRANSFORM_KW)
     ax.quiverkey(q, 0.25, 0.80, ARROW_KEY, f"{ARROW_KEY:g} m/s", labelpos="E", coordinates="axes",
-                 color=CURRENT_COLOR, zorder=9)
+                 color=CURRENT_COLOR, zorder=9, fontproperties={"size": 12})
 
 
 def plot_streamlines(ax, grid, current):
@@ -135,11 +135,11 @@ def draw_slide(lon, lat, rel, lo, hi, grid, current, style):
     cb.minorticks_off()
     label = ("Mean surface current (longer = faster)" if style == "arrows"
              else f"Mean surface current, over {MIN_SPEED:g} m/s (thicker = faster)")
-    current_handle = (plt.Line2D([], [], ls="", marker=r"$\rightarrow$", ms=26, color=CURRENT_COLOR, label=label)
-                      if style == "arrows" else plt.Line2D([], [], color=CURRENT_COLOR, lw=4, label=label))
+    current_handle = (plt.Line2D([], [], ls="", marker=r"$\rightarrow$", ms=18, color=CURRENT_COLOR, label=label)
+                      if style == "arrows" else plt.Line2D([], [], color=CURRENT_COLOR, lw=3, label=label))
     handles = [current_handle,
                plt.Line2D([], [], ls="", marker="o", ms=9, mfc=PORT_COLOR, mec="white", mew=1.5, label="Major port")]
-    ax.legend(handles=handles, loc="upper left", framealpha=0.95)
+    ax.legend(handles=handles, loc="upper left", framealpha=0.95, fontsize=11, handlelength=1.5)
 
 
 def main(argv=None):
