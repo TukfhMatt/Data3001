@@ -40,7 +40,7 @@ CURRENT_NAMES = {
     "Retroflection": (17.0, -37.0),
     "Agulhas Return Current": (40.0, -42.6),
     "Mozambique\nChannel": (40.0, -24.0),
-    "East\nMadagascar\nCurrent": (52.6, -19.5),
+    "East\nMadagascar\nCurrent": (51.7, -19.0),
     "Benguela\nCurrent": (12.6, -28.5),
 }
 # Port cities, set about 0.3° inland so the points sit clear of the coast at this scale, with where each name
