@@ -3,7 +3,7 @@ Agulhas Region — Currents Slide
 The shipping map of shipping_overlay redrawn for a slide: commercial shipping
 lanes under the mean surface current, drawn as arrows (length by speed, one per
 ARROW_SPACING) or as streamlines (thicker where faster, fading out below
-MIN_SPEED), with the main currents named and the port hotspots starred. The mean current is from one drogue type on a finer grid than
+MIN_SPEED), with the main currents named and the port hotspots starred and named. The mean current is from one drogue type on a finer grid than
 the matrices (CURRENT_RES), since the Agulhas Current is narrow. Not part of the
 pipeline; it reads the shipping density saved by shipping_overlay and the drifter
 subset, so run shipping_overlay first.
@@ -43,6 +43,14 @@ CURRENT_NAMES = {
     "Mozambique\nChannel": (40.0, -24.0),
     "East\nMadagascar\nCurrent": (52.6, -19.5),
     "Benguela\nCurrent": (12.6, -28.5),
+}
+# Where each port's name sits beside its star, on the land side (offset in points, alignment)
+PORT_LABELS = {
+    "Richards Bay": ((-13, 3), "right"),
+    "Durban": ((-13, -3), "right"),
+    "Algoa Bay (STS bunkering)": ((8, 16), "left"),
+    "Cape Town": ((13, -4), "left"),
+    "Saldanha Bay": ((13, 8), "left"),
 }
 
 
@@ -98,9 +106,12 @@ def plot_labels(ax, box):
         if in_box(lon, lat, box):
             ax.text(lon, lat, label, fontsize=15, fontweight="bold", fontstyle="italic", color=LABEL_COLOR,
                     ha="center", va="center", zorder=8, path_effects=halo, **TRANSFORM_KW)
-    for lon, lat in HOTSPOTS.values():
+    for name, (lon, lat) in HOTSPOTS.items():
         if in_box(lon, lat, box):
             ax.plot(lon, lat, marker="*", ms=17, mfc=PORT_COLOR, mec="#222222", zorder=7, **TRANSFORM_KW)
+            offset, align = PORT_LABELS.get(name, ((13, 0), "left"))
+            ax.annotate(name.split(" (")[0], (lon, lat), xytext=offset, textcoords="offset points", fontsize=13,
+                        color="#222222", ha=align, va="center", zorder=8, path_effects=halo)
 
 
 def plot_slide(shipping, grid, current, style, path):
