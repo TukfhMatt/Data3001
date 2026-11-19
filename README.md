@@ -255,6 +255,15 @@ Method check at 30 days: oil against its drogued check differ by TVD 0.42, above
 
 Read this as: oil released on the Mozambique Channel lane mostly comes ashore, about 41% within a month and 71% within a year, chiefly on central and northern Mozambique, but the amount depends on how oil is modelled. A thin release cell gets a warning and the nearest reliable cell to compare with. `--matrix` also takes `drogued`, `undrogued`, `oil_3pct` and `oil_4pct`, and `--box` and `--data` run it on another region.
 
+## Currents slide
+
+`agulhas/tools/currents_slide.py` redraws the shipping map for a slide: the commercial shipping lanes under streamlines of the mean surface current at 0.5°, thicker where faster and fading out below 0.15 m/s, with the main currents named and the ports starred. It reads `shipping_overlay`'s saved shipping density and the drifter subset. Undrogued drifters give the fuller picture, since they are most of the data, but their current includes a wind slip of about 2% of the wind; `--type drogued` shows the current at 15 m.
+
+```bash
+python -m agulhas currents_slide
+python -m agulhas currents_slide --type drogued
+```
+
 ## Using the transition matrix
 
 Each `.npz` file is a self-contained operator. `P[i, j]` is the probability that material in state `i` is in state `j` one lag τ later (`tau_days`).
