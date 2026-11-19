@@ -257,11 +257,12 @@ Read this as: oil released on the Mozambique Channel lane mostly comes ashore, a
 
 ## Currents slide
 
-`agulhas/tools/currents_slide.py` redraws the shipping map for a slide: the commercial shipping lanes under streamlines of the mean surface current at 0.5°, thicker where faster and fading out below 0.15 m/s, with the main currents named and the ports starred. It reads `shipping_overlay`'s saved shipping density and the drifter subset. Undrogued drifters give the fuller picture, since they are most of the data, but their current includes a wind slip of about 2% of the wind; `--type drogued` shows the current at 15 m.
+`agulhas/tools/currents_slide.py` redraws the shipping map for a slide: the commercial shipping lanes under the mean surface current at 0.5°, as arrows whose length is the speed (`--style streamlines` draws streamlines instead, thicker where faster and fading out below 0.15 m/s), with the main currents named and the ports starred. It reads `shipping_overlay`'s saved shipping density and the drifter subset. Undrogued drifters give the fuller picture, since they are most of the data, but their current includes a wind slip of about 2% of the wind; `--type drogued` shows the current at 15 m.
 
 ```bash
 python -m agulhas currents_slide
 python -m agulhas currents_slide --type drogued
+python -m agulhas currents_slide --style streamlines
 ```
 
 ## Using the transition matrix

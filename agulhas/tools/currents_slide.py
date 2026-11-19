@@ -1,15 +1,16 @@
 """
 Agulhas Region — Currents Slide
 The shipping map of shipping_overlay redrawn for a slide: commercial shipping
-lanes under streamlines of the mean surface current, thicker where it is faster
-and fading out below MIN_SPEED, with the main currents named and the port
-hotspots starred. The mean current is from one drogue type on a finer grid than
+lanes under the mean surface current, drawn as arrows (length by speed, one per
+ARROW_SPACING) or as streamlines (thicker where faster, fading out below
+MIN_SPEED), with the main currents named and the port hotspots starred. The mean current is from one drogue type on a finer grid than
 the matrices (CURRENT_RES), since the Agulhas Current is narrow. Not part of the
 pipeline; it reads the shipping density saved by shipping_overlay and the drifter
 subset, so run shipping_overlay first.
 
     python -m agulhas currents_slide                   # undrogued drifters
     python -m agulhas currents_slide --type drogued
+    python -m agulhas currents_slide --style streamlines
 """
 
 import os
@@ -28,6 +29,9 @@ from agulhas.release_points.shipping_overlay import HOTSPOTS, mean_currents
 CURRENT_RES = 0.5   # degrees, grid of the mean current
 MIN_SPEED = 0.15    # m/s; slower mean flow, mostly eddy noise, fades out below this
 FULL_SPEED = 1.0    # m/s; streamlines are widest from this speed up
+ARROW_SPACING = 1.5  # degrees between arrows
+ARROW_KEY = 0.5     # m/s, the length shown in the arrow key
+MIN_ARROW = 0.05    # m/s; slower cells get no arrow, which would draw as a dot
 CURRENT_COLOR = "#c2410c"
 LABEL_COLOR = "#7c2d12"
 PORT_COLOR = "#facc15"
@@ -44,6 +48,7 @@ CURRENT_NAMES = {
 
 def add_options(p):
     p.add_argument("--type", default="undrogued", choices=list(DROGUE_TYPES), help="drifters behind the mean current")
+    p.add_argument("--style", default="arrows", choices=["arrows", "streamlines"], help="how the current is drawn")
 
 
 # ── Inputs ───────────────────────────────────────────────────────────────────
@@ -61,7 +66,21 @@ def load_shipping(path):
 
 # ── Map ──────────────────────────────────────────────────────────────────────
 
-def plot_currents(ax, grid, current):
+def plot_arrows(ax, grid, current):
+    """One arrow per ARROW_SPACING, its length the mean speed; none where data are too few
+    or the flow is slower than MIN_ARROW. The key sits on land, clear of the arrows."""
+    step = max(1, int(round(ARROW_SPACING / grid.res)))
+    sub = (slice(step // 2, None, step), slice(step // 2, None, step))
+    lon, lat = np.meshgrid(grid.lon_centres[sub[1]], grid.lat_centres[sub[0]])
+    u, v = current[0][sub], current[1][sub]
+    slow = ~(np.hypot(u, v) >= MIN_ARROW)
+    q = ax.quiver(lon, lat, np.where(slow, np.nan, u), np.where(slow, np.nan, v), color=CURRENT_COLOR, scale=13,
+                  width=0.0024, headwidth=3.5, headlength=4, zorder=4, **TRANSFORM_KW)
+    ax.quiverkey(q, 0.25, 0.80, ARROW_KEY, f"{ARROW_KEY:g} m/s", labelpos="E", coordinates="axes",
+                 color=CURRENT_COLOR, zorder=9)
+
+
+def plot_streamlines(ax, grid, current):
     """Streamlines of the mean current, width by speed, transparent below MIN_SPEED.
     Cells without enough data count as still water, so streamlines end there."""
     u, v = np.nan_to_num(current[0]), np.nan_to_num(current[1])
@@ -84,18 +103,18 @@ def plot_labels(ax, box):
             ax.plot(lon, lat, marker="*", ms=17, mfc=PORT_COLOR, mec="#222222", zorder=7, **TRANSFORM_KW)
 
 
-def plot_slide(shipping, grid, current, path):
+def plot_slide(shipping, grid, current, style, path):
     lon, lat, rel = shipping
     lo, hi = np.nanpercentile(rel, [60, 99.5])
     with plt.rc_context({"font.size": 15}):
-        draw_slide(lon, lat, rel, lo, hi, grid, current)
+        draw_slide(lon, lat, rel, lo, hi, grid, current, style)
         save_figure(path)
 
 
-def draw_slide(lon, lat, rel, lo, hi, grid, current):
+def draw_slide(lon, lat, rel, lo, hi, grid, current, style):
     fig, ax = plt.subplots(figsize=(16, 9), subplot_kw=MAP_KW)
     mesh = ax.pcolormesh(lon, lat, rel, cmap="Blues", norm=LogNorm(vmin=lo, vmax=hi), **TRANSFORM_KW)
-    plot_currents(ax, grid, current)
+    (plot_arrows if style == "arrows" else plot_streamlines)(ax, grid, current)
     plot_labels(ax, grid.box)
     map_axes(ax, grid.box)
     add_gridlines(ax)
@@ -103,8 +122,11 @@ def draw_slide(lon, lat, rel, lo, hi, grid, current):
     cb.set_label("Commercial ship traffic (relative, log scale)")
     cb.set_ticks([])
     cb.minorticks_off()
-    handles = [plt.Line2D([], [], color=CURRENT_COLOR, lw=4,
-                          label=f"Mean surface current, over {MIN_SPEED:g} m/s (thicker = faster)"),
+    label = ("Mean surface current (longer = faster)" if style == "arrows"
+             else f"Mean surface current, over {MIN_SPEED:g} m/s (thicker = faster)")
+    current_handle = (plt.Line2D([], [], ls="", marker=r"$\rightarrow$", ms=26, color=CURRENT_COLOR, label=label)
+                      if style == "arrows" else plt.Line2D([], [], color=CURRENT_COLOR, lw=4, label=label))
+    handles = [current_handle,
                plt.Line2D([], [], ls="", marker="*", ms=17, mfc=PORT_COLOR, mec="#222222", label="Major port")]
     ax.legend(handles=handles, loc="upper left", framealpha=0.95)
 
@@ -112,12 +134,12 @@ def draw_slide(lon, lat, rel, lo, hi, grid, current):
 def main(argv=None):
     args = parse_args(__doc__, grid=True, lag=True, extra=add_options, argv=argv)
     tag = setting_tag(args.res, args.tau, args.box)
-    out = f"figures/{region_prefix(args.data)}_currents_slide_{args.type}_{tag}.png"
+    out = f"figures/{region_prefix(args.data)}_currents_slide_{args.type}_{args.style}_{tag}.png"
 
     shipping = load_shipping(f"data/shipping_{tag}.npz")
     grid = Grid(args.box, CURRENT_RES)
     current = mean_currents(Drifters(args.data), grid)[args.type]
-    plot_slide(shipping, grid, current, out)
+    plot_slide(shipping, grid, current, args.style, out)
     print(f"Slide map saved → {out}")
 
 
