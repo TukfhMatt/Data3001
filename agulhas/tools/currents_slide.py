@@ -3,7 +3,7 @@ Agulhas Region — Currents Slide
 The shipping map of shipping_overlay redrawn for a slide: commercial shipping
 lanes under the mean surface current, drawn as arrows (length by speed, one per
 ARROW_SPACING) or as streamlines (thicker where faster, fading out below
-MIN_SPEED), with the main currents named and the port hotspots starred and named. The mean current is from one drogue type on a finer grid than
+MIN_SPEED), with the main currents named and the ports marked and named. The mean current is from one drogue type on a finer grid than
 the matrices (CURRENT_RES), since the Agulhas Current is narrow. Not part of the
 pipeline; it reads the shipping density saved by shipping_overlay and the drifter
 subset, so run shipping_overlay first.
@@ -34,7 +34,7 @@ ARROW_KEY = 0.5     # m/s, the length shown in the arrow key
 MIN_ARROW = 0.05    # m/s; slower cells get no arrow, which would draw as a dot
 CURRENT_COLOR = "#c2410c"
 LABEL_COLOR = "#7c2d12"
-PORT_COLOR = "#facc15"
+PORT_COLOR = "#222222"
 # Named currents (label: lon, lat); those outside the box are left out
 CURRENT_NAMES = {
     "Agulhas\nCurrent": (33.6, -32.6),
@@ -46,11 +46,11 @@ CURRENT_NAMES = {
 }
 # Where each port's name sits beside its star, on the land side (offset in points, alignment)
 PORT_LABELS = {
-    "Richards Bay": ((-13, 3), "right"),
-    "Durban": ((-13, -3), "right"),
+    "Richards Bay": ((-10, 3), "right"),
+    "Durban": ((-10, -3), "right"),
     "Algoa Bay (STS bunkering)": ((8, 16), "left"),
-    "Cape Town": ((13, -4), "left"),
-    "Saldanha Bay": ((13, 8), "left"),
+    "Cape Town": ((10, -4), "left"),
+    "Saldanha Bay": ((10, 8), "left"),
 }
 
 
@@ -108,8 +108,8 @@ def plot_labels(ax, box):
                     ha="center", va="center", zorder=8, path_effects=halo, **TRANSFORM_KW)
     for name, (lon, lat) in HOTSPOTS.items():
         if in_box(lon, lat, box):
-            ax.plot(lon, lat, marker="*", ms=17, mfc=PORT_COLOR, mec="#222222", zorder=7, **TRANSFORM_KW)
-            offset, align = PORT_LABELS.get(name, ((13, 0), "left"))
+            ax.plot(lon, lat, marker="o", ms=9, mfc=PORT_COLOR, mec="white", mew=1.5, zorder=7, **TRANSFORM_KW)
+            offset, align = PORT_LABELS.get(name, ((10, 0), "left"))
             ax.annotate(name.split(" (")[0], (lon, lat), xytext=offset, textcoords="offset points", fontsize=13,
                         color="#222222", ha=align, va="center", zorder=8, path_effects=halo)
 
@@ -138,7 +138,7 @@ def draw_slide(lon, lat, rel, lo, hi, grid, current, style):
     current_handle = (plt.Line2D([], [], ls="", marker=r"$\rightarrow$", ms=26, color=CURRENT_COLOR, label=label)
                       if style == "arrows" else plt.Line2D([], [], color=CURRENT_COLOR, lw=4, label=label))
     handles = [current_handle,
-               plt.Line2D([], [], ls="", marker="*", ms=17, mfc=PORT_COLOR, mec="#222222", label="Major port")]
+               plt.Line2D([], [], ls="", marker="o", ms=9, mfc=PORT_COLOR, mec="white", mew=1.5, label="Major port")]
     ax.legend(handles=handles, loc="upper left", framealpha=0.95)
 
 
