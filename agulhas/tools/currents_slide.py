@@ -24,7 +24,7 @@ from agulhas.config import DROGUE_TYPES, parse_args, region_prefix, setting_tag
 from agulhas.drifters import Drifters, in_box
 from agulhas.grid import Grid
 from agulhas.plotting import MAP_KW, TRANSFORM_KW, add_gridlines, map_axes, save_figure
-from agulhas.release_points.shipping_overlay import HOTSPOTS, mean_currents
+from agulhas.release_points.shipping_overlay import mean_currents
 
 CURRENT_RES = 0.5   # degrees, grid of the mean current
 MIN_SPEED = 0.15    # m/s; slower mean flow, mostly eddy noise, fades out below this
@@ -44,13 +44,14 @@ CURRENT_NAMES = {
     "East\nMadagascar\nCurrent": (52.6, -19.5),
     "Benguela\nCurrent": (12.6, -28.5),
 }
-# Where each port's name sits beside its star, on the land side (offset in points, alignment)
-PORT_LABELS = {
-    "Richards Bay": ((-10, 3), "right"),
-    "Durban": ((-10, -3), "right"),
-    "Algoa Bay (STS bunkering)": ((8, 16), "left"),
-    "Cape Town": ((10, -4), "left"),
-    "Saldanha Bay": ((10, 8), "left"),
+# Port cities, set about 0.3° inland so the points sit clear of the coast at this scale, with where each name
+# sits beside its point (offset in points, alignment); those outside the box are left out
+PORTS = {
+    "Richards Bay": (31.75, -28.6, (-10, 3), "right"),
+    "Durban": (30.7, -29.75, (-10, -3), "right"),
+    "Gqeberha": (25.5, -33.55, (8, 10), "left"),
+    "Cape Town": (18.8, -33.8, (10, -4), "left"),
+    "Saldanha Bay": (18.35, -32.85, (10, 6), "left"),
 }
 
 
@@ -106,11 +107,10 @@ def plot_labels(ax, box):
         if in_box(lon, lat, box):
             ax.text(lon, lat, label, fontsize=15, fontweight="bold", fontstyle="italic", color=LABEL_COLOR,
                     ha="center", va="center", zorder=8, path_effects=halo, **TRANSFORM_KW)
-    for name, (lon, lat) in HOTSPOTS.items():
+    for name, (lon, lat, offset, align) in PORTS.items():
         if in_box(lon, lat, box):
             ax.plot(lon, lat, marker="o", ms=9, mfc=PORT_COLOR, mec="white", mew=1.5, zorder=7, **TRANSFORM_KW)
-            offset, align = PORT_LABELS.get(name, ((10, 0), "left"))
-            ax.annotate(name.split(" (")[0], (lon, lat), xytext=offset, textcoords="offset points", fontsize=13,
+            ax.annotate(name, (lon, lat), xytext=offset, textcoords="offset points", fontsize=13,
                         color="#222222", ha=align, va="center", zorder=8, path_effects=halo)
 
 
