@@ -30,7 +30,6 @@ CURRENT_RES = 0.5   # degrees, grid of the mean current
 MIN_SPEED = 0.15    # m/s; slower mean flow, mostly eddy noise, fades out below this
 FULL_SPEED = 1.0    # m/s; streamlines are widest from this speed up
 ARROW_SPACING = 1.5  # degrees between arrows
-ARROW_KEY = 0.5     # m/s, the length shown in the arrow key
 MIN_ARROW = 0.05    # m/s; slower cells get no arrow, which would draw as a dot
 CURRENT_COLOR = "#c2410c"
 LABEL_COLOR = "#7c2d12"
@@ -77,16 +76,14 @@ def load_shipping(path):
 
 def plot_arrows(ax, grid, current):
     """One arrow per ARROW_SPACING, its length the mean speed; none where data are too few
-    or the flow is slower than MIN_ARROW. The key sits on land, clear of the arrows."""
+    or the flow is slower than MIN_ARROW."""
     step = max(1, int(round(ARROW_SPACING / grid.res)))
     sub = (slice(step // 2, None, step), slice(step // 2, None, step))
     lon, lat = np.meshgrid(grid.lon_centres[sub[1]], grid.lat_centres[sub[0]])
     u, v = current[0][sub], current[1][sub]
     slow = ~(np.hypot(u, v) >= MIN_ARROW)
-    q = ax.quiver(lon, lat, np.where(slow, np.nan, u), np.where(slow, np.nan, v), color=CURRENT_COLOR, scale=13,
-                  width=0.0024, headwidth=3.5, headlength=4, zorder=4, **TRANSFORM_KW)
-    ax.quiverkey(q, 0.25, 0.80, ARROW_KEY, f"{ARROW_KEY:g} m/s", labelpos="E", coordinates="axes",
-                 color=CURRENT_COLOR, zorder=9, fontproperties={"size": 12})
+    ax.quiver(lon, lat, np.where(slow, np.nan, u), np.where(slow, np.nan, v), color=CURRENT_COLOR, scale=13,
+              width=0.0024, headwidth=3.5, headlength=4, zorder=4, **TRANSFORM_KW)
 
 
 def plot_streamlines(ax, grid, current):
