@@ -80,6 +80,7 @@ STEPS = [
 TOOLS = [
     Step("worked_example", "tools.worked_example"),
     Step("oil_explorer", "tools.oil_explorer"),
+    Step("currents_slide", "tools.currents_slide"),
     Step("opendrift_forcing", "comparison.opendrift_forcing"),
     Step("opendrift_points", "comparison.opendrift_points"),
     Step("opendrift_year", "comparison.opendrift_year"),

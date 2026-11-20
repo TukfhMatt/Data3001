@@ -14,7 +14,7 @@ How the code is organised, what each shared module is for, and the shape every s
      ┌───────────┼──────────────┬──────────────┐
 release_points/  whole_box/     coast/         validation/            read the matrices
      │                                                                → data/*.csv, figures/*.png
-     └───────────────── tools/ (worked_example, oil_explorer): read the outputs only
+     └───────────────── tools/ (worked_example, oil_explorer, currents_slide): read the outputs only
                         comparison/ (opendrift_*): OpenDrift against the oil matrix, in its own environment
 ```
 
