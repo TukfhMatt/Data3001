@@ -193,7 +193,7 @@ def exposure(P, weights, near_cells, tau, oil=False):
     prev = p[:, coast_cols].copy()
     near = np.zeros((len(W), n_cells))
     mass = {key: np.zeros((len(W), len(COAST_LABELS))) for key in OIL_RESIDUE_DAYS}
-    out = {"eventual": wf[:, STRANDED:], "exit": wf[:, :STRANDED], "days": days}
+    out = {"eventual": wf[:, STRANDED:], "exit": wf[:, :STRANDED], "days": days, "total": b}
     for step in range(1, steps[max(HORIZONS)] + 1):
         p = p @ P
         if step <= int(round(NEARSHORE_DAYS / tau)):
@@ -206,6 +206,7 @@ def exposure(P, weights, near_cells, tau, oil=False):
         for d, k in steps.items():
             if step == k:
                 out[d] = new.copy()
+                out[f"total_{d}"] = new.sum(axis=1)
                 out[f"in_R_{d}"] = p[:, :n_cells].sum(axis=1)
     out["nearshore"] = near @ near_cells.in_coast
     out["segments"] = near @ near_cells.in_segment
@@ -273,6 +274,22 @@ def rows_for(name, weighting, out, ci):
         for r, route in enumerate(ROUTES):
             add("source_share", "eventual", coast, route, out["source"][r, k], *bounds("source", r, k))
     return rows
+
+
+def totals_table(full, intervals):
+    """Share stranding on any coast, per release and horizon, with the 95% interval of the
+    per-resample sum. The coasts move together across resamples, so adding the per-coast
+    interval ends would be wrong. It is written apart from exposure_table, whose rows (one per
+    coast) stay as they were, so nothing that sums those rows can count the total twice."""
+    rows = []
+    for name in BOOT_MATRICES:
+        for r, release in enumerate(RELEASES):
+            for horizon in ["eventual"] + HORIZONS:
+                key = "total" if horizon == "eventual" else f"total_{horizon}"
+                lo, hi = intervals[name][key][:, r]
+                rows.append({"matrix": name, "release": release, "horizon": horizon,
+                             "estimate": float(full[name][key][r]), "lo": float(lo), "hi": float(hi)})
+    return pd.DataFrame(rows)
 
 
 def exposure_table(full, sens, intervals):
@@ -389,8 +406,10 @@ def print_stranding(full, intervals):
         row = {}
         for name in BOOT_MATRICES:
             for h in [30, "eventual"]:
-                est = full[name][h][r].sum()
-                row[f"{name} {h}"] = f"{est:.0%}"
+                key = "total" if h == "eventual" else f"total_{h}"
+                est = full[name][key][r]
+                lo, hi = intervals[name][key][:, r]
+                row[f"{name} {h}"] = f"{est:.0%} ({lo:.0%}\u2013{hi:.0%})"
             lo, hi = intervals[name]["days"][:, r]
             row[f"{name} days"] = f"{full[name]['days'][r]:.0f} ({lo:.0f}–{hi:.0f})"
         rows[release] = row
@@ -428,6 +447,7 @@ def main(argv=None):
     tag = setting_tag(args.res, args.tau, args.box)
     out_releases = f"data/traffic_releases_{tag}.npz"
     out_table = f"data/traffic_exposure_{tag}.csv"
+    out_totals = f"data/traffic_totals_{tag}.csv"
     out_segments = f"data/traffic_nearshore_segments_{tag}.csv"
     out_weights = f"data/traffic_weights_{tag}.csv"
     out_png = f"figures/agulhas_traffic_exposure_{tag}.png"
@@ -443,6 +463,7 @@ def main(argv=None):
     counts = load_coast_counts(f"data/coast_counts_{tag}.npz", BOOT_MATRICES, ops["drogued"]["P"].shape[0])
     full, sens, intervals = run_exposure(ops, weights, near_cells, counts, args)
     exposure_table(full, sens, intervals).to_csv(out_table, index=False)
+    totals_table(full, intervals).to_csv(out_totals, index=False)
     segment_table(full, near_cells.segment_ids).to_csv(out_segments, index=False)
     weight_table(weights, geo).to_csv(out_weights, index=False)
 
